@@ -18,6 +18,33 @@ const PROGRAM_ID = new PublicKey(
 const DFLOW_PM = new PublicKey(
   "pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb",
 );
+const DFLOW_EVENT_AUTHORITY = new PublicKey(
+  "ATZQPakBrumxMrSyuEmrt6NcxBbTR1Ucs99dnPFpBUuM",
+);
+const OPEN_PROBE_MARKET_LEDGER = new PublicKey(
+  "GGViDLxL6RRQ4zTydGoiL6NnLugxyDGraydUBAQfo9iX",
+);
+const OPEN_PROBE_MARKET_USDC = new PublicKey(
+  "BciG3VNEgDihNBcsZYxcJugBw59wQ7xRZAjen6ENaW6h",
+);
+const USDC_MINT = new PublicKey(
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+);
+const SPL_TOKEN_PROGRAM = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
+const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+);
+const OPEN_ORDER_FIXTURE = Buffer.from(
+  "4000000000000000" +
+    "bb267d4554fc60a6" +
+    "590000000000150a" +
+    "80770e0000000000" +
+    "c0d8a70000000000" +
+    "0000000000000000".repeat(5),
+  "hex",
+);
 
 const NOOP_CU_BUDGET = Number(process.env.PACTUM_NOOP_CU_BUDGET ?? "12000");
 const DFLOW_PROBE_CU_BUDGET = Number(
@@ -26,12 +53,35 @@ const DFLOW_PROBE_CU_BUDGET = Number(
 const DFLOW_PDA_PROBE_CU_BUDGET = Number(
   process.env.PACTUM_DFLOW_PDA_PROBE_CU_BUDGET ?? "80000",
 );
+const DFLOW_OPEN_PROBE_CU_BUDGET = Number(
+  process.env.PACTUM_DFLOW_OPEN_PROBE_CU_BUDGET ?? "120000",
+);
 const BASE_FEE_BUDGET_LAMPORTS = Number(
   process.env.PACTUM_BASE_FEE_BUDGET_LAMPORTS ?? "10000",
 );
 
 function anchorDiscriminator(name) {
   return crypto.createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
+}
+
+function associatedTokenAddress(owner, mint, tokenProgram = SPL_TOKEN_PROGRAM) {
+  return PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), tokenProgram.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM,
+  )[0];
+}
+
+async function surfpoolRpc(method, params) {
+  const response = await fetch(RPC_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  const body = await response.json();
+  if (body.error) {
+    throw new Error(`${method} failed: ${JSON.stringify(body.error)}`);
+  }
+  return body.result;
 }
 
 async function main() {
@@ -184,6 +234,84 @@ async function main() {
     );
   }
 
+
+  const [openProbeAuthority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("dflow_open_order_probe")],
+    PROGRAM_ID,
+  );
+  const openProbeSourceUsdc = associatedTokenAddress(
+    openProbeAuthority,
+    USDC_MINT,
+  );
+  await surfpoolRpc("surfnet_setTokenAccount", [
+    openProbeAuthority.toBase58(),
+    USDC_MINT.toBase58(),
+    { amount: 2_000_000, state: "initialized" },
+  ]);
+
+  const openProbeOrderAccount = Keypair.generate().publicKey;
+  const openProbeData = Buffer.concat([
+    anchorDiscriminator("probe_dflow_open_order_pda"),
+    OPEN_ORDER_FIXTURE,
+  ]);
+  const openProbeIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: openProbeAuthority, isSigner: false, isWritable: false },
+      { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+      { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: true },
+      { pubkey: OPEN_PROBE_MARKET_USDC, isSigner: false, isWritable: true },
+      { pubkey: openProbeOrderAccount, isSigner: false, isWritable: true },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: openProbeSourceUsdc, isSigner: false, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
+    ],
+    data: openProbeData,
+  });
+
+  const { blockhash: openProbeBlockhash } = await connection.getLatestBlockhash();
+  const openProbeTx = new Transaction({
+    feePayer: payer.publicKey,
+    recentBlockhash: openProbeBlockhash,
+  }).add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
+    SystemProgram.transfer({
+      fromPubkey: payer.publicKey,
+      toPubkey: openProbeOrderAccount,
+      lamports: 1,
+    }),
+    openProbeIx,
+  );
+  openProbeTx.sign(payer);
+
+  const openProbeSim = await connection.simulateTransaction(openProbeTx);
+  const openProbeLogs = openProbeSim.value.logs ?? [];
+  const openProbeReachedDflow = openProbeLogs.some((line) =>
+    line.includes(`Program ${DFLOW_PM.toBase58()} invoke [2]`),
+  );
+  const openProbeSignerEscalation = openProbeLogs.some((line) =>
+    line.toLowerCase().includes("signer privilege escalated"),
+  );
+
+  if (!openProbeReachedDflow || openProbeSignerEscalation) {
+    console.error(openProbeLogs.join("\n"));
+    throw new Error(
+      "Observed OpenUserOrder PDA probe did not reach DFlow with accepted signer privilege",
+    );
+  }
+
+  const openProbeCu = requireRpcMetric(
+    openProbeSim.value.unitsConsumed,
+    "dflow_open_order_probe.unitsConsumed",
+  );
+  if (openProbeCu > DFLOW_OPEN_PROBE_CU_BUDGET) {
+    throw new Error(
+      `DFlow OpenUserOrder probe CU regression: ${openProbeCu} > ${DFLOW_OPEN_PROBE_CU_BUDGET}`,
+    );
+  }
+
   console.log(JSON.stringify({
     rpc: RPC_URL,
     pactumProgram: PROGRAM_ID.toBase58(),
@@ -207,6 +335,17 @@ async function main() {
       expectedInnerFailure: true,
       computeUnits: pdaProbeCu,
       cuBudget: DFLOW_PDA_PROBE_CU_BUDGET,
+    },
+    dflowOpenUserOrderProbe: {
+      authority: openProbeAuthority.toBase58(),
+      sourceUsdc: openProbeSourceUsdc.toBase58(),
+      marketLedger: OPEN_PROBE_MARKET_LEDGER.toBase58(),
+      marketUsdcAccount: OPEN_PROBE_MARKET_USDC.toBase58(),
+      reachedDflow: openProbeReachedDflow,
+      signerPrivilegeAccepted: !openProbeSignerEscalation,
+      expectedInnerFailure: Boolean(openProbeSim.value.err),
+      computeUnits: openProbeCu,
+      cuBudget: DFLOW_OPEN_PROBE_CU_BUDGET,
     },
   }, null, 2));
 }
