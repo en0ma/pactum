@@ -465,7 +465,10 @@ pub mod pactum_vault {
         cost_basis_usdc: u64,
         outcome_atoms: u64,
     ) -> Result<()> {
-        require!(cost_basis_usdc > 0 && outcome_atoms > 0, PactumError::ZeroAmount);
+        require!(
+            cost_basis_usdc > 0 && outcome_atoms > 0,
+            PactumError::ZeroAmount
+        );
 
         let exposure = &mut ctx.accounts.market_exposure;
         exposure.market_ledger = ctx.accounts.approved_market.market_ledger;
