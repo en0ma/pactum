@@ -12,7 +12,7 @@ pub mod math;
 pub mod state;
 
 use error::PactumError;
-use state::{KeeperAuthorization, UserPosition, VaultConfig};
+use state::{ApprovedMarket, KeeperAuthorization, UserPosition, VaultConfig};
 
 declare_id!("AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw");
 
@@ -81,6 +81,37 @@ pub mod pactum_vault {
             min_liquidity_buffer_usdc,
         });
 
+        Ok(())
+    }
+
+    pub fn register_market(
+        ctx: Context<RegisterMarket>,
+        settlement_vault: Pubkey,
+        yes_mint: Pubkey,
+        no_mint: Pubkey,
+    ) -> Result<()> {
+        let market = &mut ctx.accounts.approved_market;
+        market.market_ledger = ctx.accounts.market_ledger.key();
+        market.settlement_vault = settlement_vault;
+        market.yes_mint = yes_mint;
+        market.no_mint = no_mint;
+        market.enabled = true;
+        market.bump = ctx.bumps.approved_market;
+
+        emit!(MarketChanged {
+            market_ledger: market.market_ledger,
+            enabled: true,
+        });
+
+        Ok(())
+    }
+
+    pub fn set_market_enabled(ctx: Context<SetMarketEnabled>, enabled: bool) -> Result<()> {
+        ctx.accounts.approved_market.enabled = enabled;
+        emit!(MarketChanged {
+            market_ledger: ctx.accounts.approved_market.market_ledger,
+            enabled,
+        });
         Ok(())
     }
 
@@ -309,6 +340,54 @@ pub struct AdminConfig<'info> {
 }
 
 #[derive(Accounts)]
+pub struct RegisterMarket<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = config.config_bump,
+        has_one = admin
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    /// CHECK: the market ledger is an external DFlow account and is stored as
+    /// the registry key. Production trade CPI will additionally validate its
+    /// owner/relationships on the fork-tested execution path.
+    pub market_ledger: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        seeds = [b"market", market_ledger.key().as_ref()],
+        bump,
+        space = 8 + ApprovedMarket::LEN
+    )]
+    pub approved_market: Account<'info, ApprovedMarket>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetMarketEnabled<'info> {
+    pub admin: Signer<'info>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = config.config_bump,
+        has_one = admin
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"market", approved_market.market_ledger.as_ref()],
+        bump = approved_market.bump
+    )]
+    pub approved_market: Account<'info, ApprovedMarket>,
+}
+
+#[derive(Accounts)]
 pub struct AuthorizeKeeper<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
@@ -487,6 +566,12 @@ pub struct RiskLimitsChanged {
     pub max_trade_usdc: u64,
     pub max_total_exposure_usdc: u64,
     pub min_liquidity_buffer_usdc: u64,
+}
+
+#[event]
+pub struct MarketChanged {
+    pub market_ledger: Pubkey,
+    pub enabled: bool,
 }
 
 #[event]
