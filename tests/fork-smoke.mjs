@@ -137,55 +137,41 @@ function decodeBase58(text) {
   return Buffer.concat([Buffer.alloc(leadingZeroes), Buffer.from(bytes)]);
 }
 
-async function jsonRpc(url, method, params) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
-  const body = await response.json();
-  if (body.error) {
-    throw new Error(`${method} failed: ${JSON.stringify(body.error)}`);
-  }
-  return body.result;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function jsonRpcBatch(url, calls) {
-  const payload = calls.map((call, index) => ({
-    jsonrpc: "2.0",
-    id: index + 1,
-    method: call.method,
-    params: call.params,
-  }));
-
-  try {
+async function jsonRpc(url, method, params, maxAttempts = 5) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const response = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     });
     const body = await response.json();
-    if (Array.isArray(body)) {
-      const byId = new Map(body.map((item) => [item.id, item]));
-      return payload.map((item) => {
-        const result = byId.get(item.id);
-        if (!result) throw new Error(`missing batch RPC result for id ${item.id}`);
-        if (result.error) {
-          throw new Error(`batch RPC error: ${JSON.stringify(result.error)}`);
-        }
-        return result.result;
-      });
+
+    const rateLimited =
+      response.status === 429 ||
+      body?.error?.code === 429 ||
+      body?.error?.message?.toLowerCase().includes("too many requests");
+
+    if (!rateLimited) {
+      if (body.error) {
+        throw new Error(`${method} failed: ${JSON.stringify(body.error)}`);
+      }
+      return body.result;
     }
-  } catch {
-    // Public Solana RPC providers differ on batch support; fall through to
-    // individual calls so the terminal-state proof tests DFlow, not batching.
+
+    if (attempt === maxAttempts) {
+      throw new Error(
+        `${method} failed after ${maxAttempts} attempts: ${JSON.stringify(body.error)}`,
+      );
+    }
+
+    await sleep(500 * 2 ** (attempt - 1));
   }
 
-  const results = [];
-  for (const call of calls) {
-    results.push(await jsonRpc(url, call.method, call.params));
-  }
-  return results;
+  throw new Error(`${method} failed without a response`);
 }
 
 function resolvedMessageKeys(tx) {
@@ -231,22 +217,11 @@ function dflowReferencedIndexes(tx, keys) {
 async function probeDflowTerminalAccountClosure() {
   const signatures = await jsonRpc(MAINNET_RPC_URL, "getSignaturesForAddress", [
     DFLOW_PM.toBase58(),
-    { limit: 60 },
+    { limit: 20 },
   ]);
   const candidates = signatures
     .filter((entry) => entry.err === null)
-    .slice(0, 40);
-
-  const transactions = await jsonRpcBatch(
-    MAINNET_RPC_URL,
-    candidates.map((entry) => ({
-      method: "getTransaction",
-      params: [
-        entry.signature,
-        { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 },
-      ],
-    })),
-  );
+    .slice(0, 16);
 
   const rent344 = await jsonRpc(
     MAINNET_RPC_URL,
@@ -255,9 +230,15 @@ async function probeDflowTerminalAccountClosure() {
   );
 
   const evidence = [];
-  for (let i = 0; i < transactions.length; i += 1) {
-    const tx = transactions[i];
-    if (!tx?.meta || tx.meta.err) continue;
+  for (let i = 0; i < candidates.length; i += 1) {
+    const tx = await jsonRpc(MAINNET_RPC_URL, "getTransaction", [
+      candidates[i].signature,
+      { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+    ]);
+    if (!tx?.meta || tx.meta.err) {
+      await sleep(250);
+      continue;
+    }
     const keys = resolvedMessageKeys(tx);
     const terminalType = terminalDflowEventType(tx, keys);
     if (terminalType === null) continue;
@@ -279,6 +260,7 @@ async function probeDflowTerminalAccountClosure() {
     });
 
     if (evidence.length >= 2) break;
+    await sleep(250);
   }
 
   if (evidence.length === 0) {
