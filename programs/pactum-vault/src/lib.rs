@@ -541,7 +541,7 @@ pub struct InitializeVault<'info> {
         bump,
         space = 8 + VaultConfig::LEN
     )]
-    pub config: Account<'info, VaultConfig>,
+    pub config: Box<Account<'info, VaultConfig>>,
 
     /// CHECK: PDA used only as the authority over Pactum-owned token accounts.
     #[account(seeds = [b"vault_authority"], bump)]
@@ -558,7 +558,7 @@ pub struct InitializeVault<'info> {
         token::mint = usdc_mint,
         token::authority = vault_authority
     )]
-    pub vault_usdc: Account<'info, TokenAccount>,
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -601,7 +601,7 @@ pub struct RegisterMarket<'info> {
         bump,
         space = 8 + ApprovedMarket::LEN
     )]
-    pub approved_market: Account<'info, ApprovedMarket>,
+    pub approved_market: Box<Account<'info, ApprovedMarket>>,
 
     pub system_program: Program<'info, System>,
 }
@@ -647,7 +647,7 @@ pub struct AuthorizeKeeper<'info> {
         bump,
         space = 8 + KeeperAuthorization::LEN
     )]
-    pub keeper_authorization: Account<'info, KeeperAuthorization>,
+    pub keeper_authorization: Box<Account<'info, KeeperAuthorization>>,
 
     pub system_program: Program<'info, System>,
 }
@@ -812,7 +812,7 @@ pub struct RedeemMarketOutcome<'info> {
         token::mint = usdc_mint,
         token::authority = market_ledger
     )]
-    pub settlement_vault: Account<'info, TokenAccount>,
+    pub settlement_vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: Pactum PDA that signs DFlow token-authority roles.
     #[account(
@@ -839,14 +839,14 @@ pub struct RedeemMarketOutcome<'info> {
         constraint = outcome_account.mint == outcome_mint.key(),
         constraint = outcome_account.owner == vault_authority.key()
     )]
-    pub outcome_account: InterfaceAccount<'info, InterfaceTokenAccount>,
+    pub outcome_account: Box<InterfaceAccount<'info, InterfaceTokenAccount>>,
 
     #[account(
         mut,
         constraint = *outcome_mint.to_account_info().owner
             == dflow::prediction_v1::TOKEN_2022_PROGRAM
     )]
-    pub outcome_mint: InterfaceAccount<'info, InterfaceMint>,
+    pub outcome_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
 
     #[account(
         mut,
@@ -860,7 +860,7 @@ pub struct RedeemMarketOutcome<'info> {
         constraint = market_exposure.market_ledger == approved_market.market_ledger,
         constraint = market_exposure.outcome_mint == outcome_mint.key()
     )]
-    pub market_exposure: Account<'info, MarketExposure>,
+    pub market_exposure: Box<Account<'info, MarketExposure>>,
 
     /// CHECK: fixed DFlow event-authority account.
     #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
