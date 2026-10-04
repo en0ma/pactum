@@ -15,14 +15,10 @@ pub const OPEN_USER_ORDER_DATA_LEN: usize = 80;
 pub const FILL_USER_ORDER_DATA_LEN: usize = 32;
 pub const REDEEM_MARKET_OUTCOME_DATA_LEN: usize = 8;
 
-pub const EVENT_AUTHORITY: Pubkey =
-    pubkey!("ATZQPakBrumxMrSyuEmrt6NcxBbTR1Ucs99dnPFpBUuM");
-pub const TOKEN_2022_PROGRAM: Pubkey =
-    pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-pub const SPL_TOKEN_PROGRAM: Pubkey =
-    pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-pub const SYSTEM_PROGRAM: Pubkey =
-    pubkey!("11111111111111111111111111111111");
+pub const EVENT_AUTHORITY: Pubkey = pubkey!("ATZQPakBrumxMrSyuEmrt6NcxBbTR1Ucs99dnPFpBUuM");
+pub const TOKEN_2022_PROGRAM: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+pub const SPL_TOKEN_PROGRAM: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+pub const SYSTEM_PROGRAM: Pubkey = pubkey!("11111111111111111111111111111111");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutcomeSide {
