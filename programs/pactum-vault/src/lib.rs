@@ -1,8 +1,11 @@
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
+use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
-use anchor_spl::token_interface::{Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount};
+use anchor_spl::token_interface::{
+    Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount, TokenInterface,
+};
 
 #[cfg(feature = "test-hooks")]
 use solana_cpi::invoke;
@@ -312,6 +315,7 @@ pub mod pactum_vault {
             &ctx.accounts.approved_market,
             ctx.accounts.outcome_mint.key(),
         )?;
+        let outcome_balance_before = ctx.accounts.outcome_ata.amount;
 
         let remaining_liquidity = ctx
             .accounts
@@ -404,6 +408,8 @@ pub mod pactum_vault {
         pending.outcome_mint = ctx.accounts.outcome_mint.key();
         pending.cost_basis_usdc = input_amount;
         pending.quoted_outcome_atoms = decoded.quoted_output_amount;
+        pending.outcome_balance_before = outcome_balance_before;
+        pending.slippage_bps = slippage_bps;
         pending.bump = ctx.bumps.pending_order;
 
         ctx.accounts.config.open_exposure_usdc = ctx
@@ -421,6 +427,75 @@ pub mod pactum_vault {
             input_usdc: input_amount,
             quoted_outcome_atoms: decoded.quoted_output_amount,
             slippage_bps,
+        });
+
+        Ok(())
+    }
+
+    /// Reconcile an asynchronous DFlow FillUserOrder into redeemable exposure.
+    ///
+    /// The canonical PDA-owned Token-2022 ATA is the source of truth. This
+    /// instruction does not trust keeper-provided fill amounts or API events.
+    pub fn reconcile_dflow_fill(ctx: Context<ReconcileDflowFill>) -> Result<()> {
+        let current_outcome_balance = ctx.accounts.outcome_ata.amount;
+        let filled_outcome_atoms = current_outcome_balance
+            .checked_sub(ctx.accounts.pending_order.outcome_balance_before)
+            .ok_or(PactumError::MathOverflow)?;
+
+        let min_outcome_atoms = dflow::prediction_v1::minimum_outcome_atoms(
+            ctx.accounts.pending_order.quoted_outcome_atoms,
+            ctx.accounts.pending_order.slippage_bps,
+        )?;
+        require!(
+            filled_outcome_atoms >= min_outcome_atoms && filled_outcome_atoms > 0,
+            PactumError::DflowFillNotObserved
+        );
+
+        require_keys_eq!(
+            *ctx.accounts.order_account.owner,
+            dflow::DFLOW_PREDICTION_MARKETS,
+            PactumError::InvalidDflowAccounts
+        );
+        require!(
+            ctx.accounts.order_account.data_len()
+                == dflow::prediction_v1::OBSERVED_USER_ORDER_ACCOUNT_LEN,
+            PactumError::InvalidDflowAccounts
+        );
+
+        let exposure = &mut ctx.accounts.market_exposure;
+        if exposure.market_ledger == Pubkey::default() {
+            exposure.market_ledger = ctx.accounts.approved_market.market_ledger;
+            exposure.outcome_mint = ctx.accounts.outcome_mint.key();
+            exposure.bump = ctx.bumps.market_exposure;
+        } else {
+            require_keys_eq!(
+                exposure.market_ledger,
+                ctx.accounts.approved_market.market_ledger,
+                PactumError::InvalidMarketExposure
+            );
+            require_keys_eq!(
+                exposure.outcome_mint,
+                ctx.accounts.outcome_mint.key(),
+                PactumError::InvalidMarketExposure
+            );
+        }
+
+        exposure.cost_basis_usdc = exposure
+            .cost_basis_usdc
+            .checked_add(ctx.accounts.pending_order.cost_basis_usdc)
+            .ok_or(PactumError::MathOverflow)?;
+        exposure.outcome_atoms = exposure
+            .outcome_atoms
+            .checked_add(filled_outcome_atoms)
+            .ok_or(PactumError::MathOverflow)?;
+
+        emit!(DflowOrderFilled {
+            keeper: ctx.accounts.keeper.key(),
+            order_account: ctx.accounts.pending_order.order_account,
+            market_ledger: exposure.market_ledger,
+            outcome_mint: exposure.outcome_mint,
+            cost_basis_usdc: ctx.accounts.pending_order.cost_basis_usdc,
+            filled_outcome_atoms,
         });
 
         Ok(())
@@ -1047,13 +1122,30 @@ pub struct ExecuteTrade<'info> {
     pub outcome_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
 
     #[account(
+        init_if_needed,
+        payer = keeper,
+        associated_token::mint = outcome_mint,
+        associated_token::authority = vault_authority,
+        associated_token::token_program = token_2022_program
+    )]
+    pub outcome_ata: Box<InterfaceAccount<'info, InterfaceTokenAccount>>,
+
+    #[account(
         init,
         payer = keeper,
-        seeds = [b"pending_order", config.key().as_ref(), order_account.key().as_ref()],
+        seeds = [
+            b"pending_order",
+            config.key().as_ref(),
+            approved_market.market_ledger.as_ref(),
+            outcome_mint.key().as_ref()
+        ],
         bump,
         space = 8 + PendingDflowOrder::LEN
     )]
     pub pending_order: Box<Account<'info, PendingDflowOrder>>,
+
+    pub token_2022_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
 
     /// CHECK: fixed DFlow event authority.
     #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
@@ -1065,6 +1157,91 @@ pub struct ExecuteTrade<'info> {
     /// CHECK: fixed DFlow Prediction Markets program.
     #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
     pub dflow_program: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ReconcileDflowFill<'info> {
+    #[account(mut)]
+    pub keeper: Signer<'info>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = config.config_bump
+    )]
+    pub config: Box<Account<'info, VaultConfig>>,
+
+    #[account(
+        seeds = [b"keeper", config.key().as_ref(), keeper.key().as_ref()],
+        bump = keeper_authorization.bump,
+        constraint = keeper_authorization.keeper == keeper.key()
+    )]
+    pub keeper_authorization: Box<Account<'info, KeeperAuthorization>>,
+
+    #[account(
+        seeds = [b"market", approved_market.market_ledger.as_ref()],
+        bump = approved_market.bump
+    )]
+    pub approved_market: Box<Account<'info, ApprovedMarket>>,
+
+    /// CHECK: bound to the stored pending DFlow user-order account.
+    #[account(
+        address = pending_order.order_account,
+        constraint = *order_account.owner == dflow::DFLOW_PREDICTION_MARKETS
+    )]
+    pub order_account: UncheckedAccount<'info>,
+
+    /// CHECK: Pactum PDA owning the canonical outcome ATA.
+    #[account(
+        seeds = [b"vault_authority"],
+        bump = config.vault_authority_bump
+    )]
+    pub vault_authority: UncheckedAccount<'info>,
+
+    #[account(
+        constraint = *outcome_mint.to_account_info().owner
+            == dflow::prediction_v1::TOKEN_2022_PROGRAM
+    )]
+    pub outcome_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
+
+    #[account(
+        associated_token::mint = outcome_mint,
+        associated_token::authority = vault_authority,
+        associated_token::token_program = token_2022_program
+    )]
+    pub outcome_ata: Box<InterfaceAccount<'info, InterfaceTokenAccount>>,
+
+    #[account(
+        mut,
+        close = keeper,
+        seeds = [
+            b"pending_order",
+            config.key().as_ref(),
+            approved_market.market_ledger.as_ref(),
+            outcome_mint.key().as_ref()
+        ],
+        bump = pending_order.bump,
+        constraint = pending_order.market_ledger == approved_market.market_ledger,
+        constraint = pending_order.outcome_mint == outcome_mint.key()
+    )]
+    pub pending_order: Box<Account<'info, PendingDflowOrder>>,
+
+    #[account(
+        init_if_needed,
+        payer = keeper,
+        seeds = [
+            b"exposure",
+            config.key().as_ref(),
+            approved_market.market_ledger.as_ref(),
+            outcome_mint.key().as_ref()
+        ],
+        bump,
+        space = 8 + MarketExposure::LEN
+    )]
+    pub market_exposure: Box<Account<'info, MarketExposure>>,
+
+    pub token_2022_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -1355,6 +1532,16 @@ pub struct DflowOrderOpened {
     pub input_usdc: u64,
     pub quoted_outcome_atoms: u64,
     pub slippage_bps: u16,
+}
+
+#[event]
+pub struct DflowOrderFilled {
+    pub keeper: Pubkey,
+    pub order_account: Pubkey,
+    pub market_ledger: Pubkey,
+    pub outcome_mint: Pubkey,
+    pub cost_basis_usdc: u64,
+    pub filled_outcome_atoms: u64,
 }
 
 #[event]
