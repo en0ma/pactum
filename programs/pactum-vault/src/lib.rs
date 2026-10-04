@@ -410,7 +410,6 @@ pub mod pactum_vault {
         pending.cost_basis_usdc = input_amount;
         pending.quoted_outcome_atoms = quoted_outcome_atoms;
         pending.outcome_balance_start = outcome_balance_before;
-        pending.outcome_balance_observed = outcome_balance_before;
         pending.refund_usdc_balance_before = refund_usdc_balance_before;
         pending.slippage_bps = slippage_bps;
         pending.bump = ctx.bumps.pending_order;
@@ -430,50 +429,6 @@ pub mod pactum_vault {
             input_usdc: input_amount,
             quoted_outcome_atoms: decoded.quoted_output_amount,
             slippage_bps,
-        });
-
-        Ok(())
-    }
-
-    /// Reconcile an asynchronous DFlow FillUserOrder into redeemable exposure.
-    ///
-    /// The canonical PDA-owned Token-2022 ATA is the source of truth. This
-    /// instruction does not trust keeper-provided fill amounts or API events.
-    pub fn reconcile_dflow_fill(ctx: Context<ReconcileDflowFill>) -> Result<()> {
-        let current_outcome_balance = ctx.accounts.outcome_ata.amount;
-        let newly_observed_outcome_atoms = current_outcome_balance
-            .checked_sub(ctx.accounts.pending_order.outcome_balance_observed)
-            .ok_or(PactumError::MathOverflow)?;
-
-        require!(
-            newly_observed_outcome_atoms > 0,
-            PactumError::DflowFillNotObserved
-        );
-
-        require_keys_eq!(
-            *ctx.accounts.order_account.owner,
-            dflow::DFLOW_PREDICTION_MARKETS,
-            PactumError::InvalidDflowAccounts
-        );
-        require!(
-            ctx.accounts.order_account.data_len()
-                == dflow::prediction_v1::OBSERVED_USER_ORDER_ACCOUNT_LEN,
-            PactumError::InvalidDflowAccounts
-        );
-
-        let pending = &mut ctx.accounts.pending_order;
-        pending.outcome_balance_observed = current_outcome_balance;
-        let cumulative_observed_outcome_atoms = current_outcome_balance
-            .checked_sub(pending.outcome_balance_start)
-            .ok_or(PactumError::MathOverflow)?;
-
-        emit!(DflowOrderFillObserved {
-            keeper: ctx.accounts.keeper.key(),
-            order_account: pending.order_account,
-            market_ledger: pending.market_ledger,
-            outcome_mint: pending.outcome_mint,
-            newly_filled_outcome_atoms: newly_observed_outcome_atoms,
-            cumulative_filled_outcome_atoms: cumulative_observed_outcome_atoms,
         });
 
         Ok(())
@@ -857,7 +812,6 @@ pub mod pactum_vault {
         pending.cost_basis_usdc = cost_basis_usdc;
         pending.quoted_outcome_atoms = quoted_outcome_atoms;
         pending.outcome_balance_start = outcome_balance_before;
-        pending.outcome_balance_observed = outcome_balance_before;
         pending.refund_usdc_balance_before = 0;
         pending.slippage_bps = slippage_bps;
         pending.bump = ctx.bumps.pending_order;
@@ -1361,71 +1315,6 @@ pub struct ExecuteTrade<'info> {
     /// CHECK: fixed DFlow Prediction Markets program.
     #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
     pub dflow_program: UncheckedAccount<'info>,
-}
-
-#[derive(Accounts)]
-pub struct ReconcileDflowFill<'info> {
-    #[account(mut)]
-    pub keeper: Signer<'info>,
-
-    #[account(
-        seeds = [b"config"],
-        bump = config.config_bump
-    )]
-    pub config: Box<Account<'info, VaultConfig>>,
-
-    #[account(
-        seeds = [b"keeper", config.key().as_ref(), keeper.key().as_ref()],
-        bump = keeper_authorization.bump,
-        constraint = keeper_authorization.keeper == keeper.key()
-    )]
-    pub keeper_authorization: Box<Account<'info, KeeperAuthorization>>,
-
-    #[account(
-        seeds = [b"market", approved_market.market_ledger.as_ref()],
-        bump = approved_market.bump
-    )]
-    pub approved_market: Box<Account<'info, ApprovedMarket>>,
-
-    /// CHECK: bound to the stored pending DFlow user-order account.
-    #[account(
-        address = pending_order.order_account,
-        constraint = *order_account.owner == dflow::DFLOW_PREDICTION_MARKETS
-    )]
-    pub order_account: UncheckedAccount<'info>,
-
-    /// CHECK: Pactum PDA owning the canonical outcome ATA.
-    #[account(
-        seeds = [b"vault_authority"],
-        bump = config.vault_authority_bump
-    )]
-    pub vault_authority: UncheckedAccount<'info>,
-
-    #[account(
-        constraint = *outcome_mint.to_account_info().owner
-            == dflow::prediction_v1::TOKEN_2022_PROGRAM
-    )]
-    pub outcome_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
-
-    #[account(
-        associated_token::mint = outcome_mint,
-        associated_token::authority = vault_authority,
-        associated_token::token_program = token_2022_program
-    )]
-    pub outcome_ata: Box<InterfaceAccount<'info, InterfaceTokenAccount>>,
-
-    #[account(
-        mut,
-        seeds = [b"pending_order", config.key().as_ref()],
-        bump = pending_order.bump,
-        constraint = pending_order.market_ledger == approved_market.market_ledger,
-        constraint = pending_order.outcome_mint == outcome_mint.key()
-    )]
-    pub pending_order: Box<Account<'info, PendingDflowOrder>>,
-
-    pub token_2022_program: Interface<'info, TokenInterface>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -1939,16 +1828,6 @@ pub struct DflowOrderOpened {
     pub input_usdc: u64,
     pub quoted_outcome_atoms: u64,
     pub slippage_bps: u16,
-}
-
-#[event]
-pub struct DflowOrderFillObserved {
-    pub keeper: Pubkey,
-    pub order_account: Pubkey,
-    pub market_ledger: Pubkey,
-    pub outcome_mint: Pubkey,
-    pub newly_filled_outcome_atoms: u64,
-    pub cumulative_filled_outcome_atoms: u64,
 }
 
 #[event]
