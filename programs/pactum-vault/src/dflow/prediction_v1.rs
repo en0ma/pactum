@@ -281,13 +281,7 @@ mod tests {
             system_program: SYSTEM_PROGRAM,
         };
 
-        assert!(validate_open_order_keys(
-            &keys,
-            &market,
-            vault_usdc,
-            vault_authority,
-        )
-        .is_err());
+        assert!(validate_open_order_keys(&keys, &market, vault_usdc, vault_authority,).is_err());
     }
 
     #[test]
