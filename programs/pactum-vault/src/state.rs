@@ -15,8 +15,7 @@ pub struct VaultConfig {
 }
 
 impl VaultConfig {
-    pub const LEN: usize =
-        32 + // admin
+    pub const LEN: usize = 32 + // admin
         32 + // usdc_vault
         1 +  // paused
         1 +  // vault_authority_bump
@@ -25,7 +24,7 @@ impl VaultConfig {
         8 +  // max_total_exposure_usdc
         8 +  // min_liquidity_buffer_usdc
         8 +  // open_exposure_usdc
-        8;   // total_shares
+        8; // total_shares
 }
 
 #[account]
