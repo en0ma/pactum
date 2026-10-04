@@ -36,6 +36,8 @@ pub enum PactumError {
     InvalidDflowSpend,
     #[msg("Trade slippage exceeds Pactum's protocol cap")]
     InvalidSlippage,
+    #[msg("The expected DFlow fill is not yet reflected in the PDA-owned outcome ATA")]
+    DflowFillNotObserved,
     #[msg("Tracked market exposure does not match the redeemable position")]
     InvalidMarketExposure,
     #[msg("DFlow redemption did not burn the complete tracked outcome position")]
