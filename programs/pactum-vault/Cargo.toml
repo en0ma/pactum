@@ -24,3 +24,6 @@ anchor-spl = "=1.1.2"
 solana-cpi = "3"
 solana-instruction = "3"
 solana-pubkey = "3"
+
+[dev-dependencies]
+proptest = "=1.6.0"
