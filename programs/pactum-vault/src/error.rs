@@ -22,4 +22,12 @@ pub enum PactumError {
     InvalidRiskLimits,
     #[msg("Unauthorized admin")]
     UnauthorizedAdmin,
+    #[msg("Market configuration is disabled")]
+    MarketDisabled,
+    #[msg("Trade amount exceeds the per-trade risk limit")]
+    TradeTooLarge,
+    #[msg("Trade would exceed aggregate exposure limit")]
+    ExposureLimitExceeded,
+    #[msg("Unexpected DFlow instruction fixture")]
+    InvalidDflowFixture,
 }
