@@ -550,12 +550,7 @@ async function main() {
     PROGRAM_ID,
   );
   const [pendingOrder] = PublicKey.findProgramAddressSync(
-    [
-      Buffer.from("pending_order"),
-      config.toBuffer(),
-      OPEN_PROBE_MARKET_LEDGER.toBuffer(),
-      FILL_RECONCILE_OUTCOME_MINT.toBuffer(),
-    ],
+    [Buffer.from("pending_order"), config.toBuffer()],
     PROGRAM_ID,
   );
   const [marketExposure] = PublicKey.findProgramAddressSync(
@@ -706,16 +701,16 @@ async function main() {
     throw new Error("PendingDflowOrder was closed before terminal DFlow proof");
   }
 
-  const reconciledBaseline = pendingInfo.data.readBigUInt64LE(120);
-  const cumulativeFilledOutcomeAtoms = pendingInfo.data.readBigUInt64LE(128);
-  if (reconciledBaseline !== reconcileQuotedOutcome) {
+  const outcomeBalanceStart = pendingInfo.data.readBigUInt64LE(120);
+  const outcomeBalanceObserved = pendingInfo.data.readBigUInt64LE(128);
+  if (outcomeBalanceStart !== 0n) {
     throw new Error(
-      `unexpected reconciled ATA baseline: ${reconciledBaseline} != ${reconcileQuotedOutcome}`,
+      `unexpected immutable outcome start balance: ${outcomeBalanceStart} != 0`,
     );
   }
-  if (cumulativeFilledOutcomeAtoms !== reconcileQuotedOutcome) {
+  if (outcomeBalanceObserved !== reconcileQuotedOutcome) {
     throw new Error(
-      `unexpected cumulative fill: ${cumulativeFilledOutcomeAtoms} != ${reconcileQuotedOutcome}`,
+      `unexpected observed ATA baseline: ${outcomeBalanceObserved} != ${reconcileQuotedOutcome}`,
     );
   }
 
@@ -832,7 +827,13 @@ async function main() {
   await surfpoolRpc("surfnet_setTokenAccount", [
     vaultAuthority.toBase58(),
     USDC_MINT.toBase58(),
-    { amount: Number(reconcileCostBasis), state: "initialized" },
+    { amount: Number(reconcileCostBasis + 123n), state: "initialized" },
+  ]);
+  await surfpoolRpc("surfnet_setTokenAccount", [
+    vaultAuthority.toBase58(),
+    FILL_RECONCILE_OUTCOME_MINT.toBase58(),
+    { amount: Number(reconcileQuotedOutcome + 1n), state: "initialized" },
+    TOKEN_2022_PROGRAM.toBase58(),
   ]);
   await surfpoolRpc("surfnet_setAccount", [
     unwindOrderAccount.toBase58(),
@@ -927,13 +928,13 @@ async function main() {
     dflowFillReconciliation: {
       outcomeAta: outcomeAta.toBase58(),
       pendingRetainedUntilTerminalProof: pendingInfo !== null,
-      reconciledAtaBaseline: reconciledBaseline.toString(),
-      cumulativeFilledOutcomeAtoms: cumulativeFilledOutcomeAtoms.toString(),
+      outcomeBalanceStart: outcomeBalanceStart.toString(),
+      outcomeBalanceObserved: outcomeBalanceObserved.toString(),
       replayRejected: Boolean(secondReconcileSim.value.err),
       terminalFilledFinalized: pendingAfterFinalize === null,
       finalizedCostBasis: finalizedCostBasis.toString(),
       finalizedOutcomeAtoms: finalizedOutcomeAtoms.toString(),
-      zeroFillUnwound: pendingAfterUnwind === null,
+      donationTolerantFullRefundUnwind: pendingAfterUnwind === null,
       openExposureAfterUnwind: openExposureAfterUnwind.toString(),
       computeUnits: reconcileCu,
       cuBudget: FILL_RECONCILE_CU_BUDGET,
