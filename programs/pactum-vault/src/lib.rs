@@ -2,10 +2,10 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
+use anchor_spl::token_interface::{Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount};
 
 #[cfg(feature = "test-hooks")]
 use solana_cpi::invoke;
-#[cfg(feature = "test-hooks")]
 use solana_instruction::{AccountMeta, Instruction};
 
 pub mod dflow;
@@ -14,7 +14,7 @@ pub mod math;
 pub mod state;
 
 use error::PactumError;
-use state::{ApprovedMarket, KeeperAuthorization, UserPosition, VaultConfig};
+use state::{ApprovedMarket, KeeperAuthorization, MarketExposure, UserPosition, VaultConfig};
 
 declare_id!("AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw");
 
@@ -268,6 +268,134 @@ pub mod pactum_vault {
             user: ctx.accounts.user.key(),
             amount,
             shares,
+        });
+
+        Ok(())
+    }
+
+    /// Redeem a complete, tracked winning DFlow outcome position.
+    ///
+    /// This is deliberately available while paused and after a market is
+    /// disabled so settlement/recovery cannot be administratively deadlocked.
+    pub fn redeem_market_outcome(ctx: Context<RedeemMarketOutcome>) -> Result<()> {
+        let side = dflow::prediction_v1::OutcomeSide::from_mint(
+            &ctx.accounts.approved_market,
+            ctx.accounts.outcome_mint.key(),
+        )?;
+
+        let keys = dflow::prediction_v1::RedeemKeys {
+            event_authority: ctx.accounts.event_authority.key(),
+            market_ledger: ctx.accounts.market_ledger.key(),
+            settlement_vault: ctx.accounts.settlement_vault.key(),
+            outcome_account: ctx.accounts.outcome_account.key(),
+            settlement_destination: ctx.accounts.vault_usdc.key(),
+            usdc_mint: ctx.accounts.usdc_mint.key(),
+            outcome_mint: ctx.accounts.outcome_mint.key(),
+            token_authority: ctx.accounts.vault_authority.key(),
+            token_2022_program: ctx.accounts.token_2022_program.key(),
+            token_program: ctx.accounts.token_program.key(),
+        };
+        dflow::prediction_v1::validate_redeem_keys(
+            &keys,
+            &ctx.accounts.approved_market,
+            side,
+            ctx.accounts.vault_usdc.key(),
+            ctx.accounts.vault_authority.key(),
+        )?;
+
+        require!(
+            ctx.accounts.market_exposure.cost_basis_usdc > 0
+                && ctx.accounts.market_exposure.outcome_atoms > 0,
+            PactumError::InvalidMarketExposure
+        );
+        require!(
+            ctx.accounts.market_exposure.outcome_atoms == ctx.accounts.outcome_account.amount,
+            PactumError::InvalidMarketExposure
+        );
+        require!(
+            ctx.accounts.outcome_mint.decimals == ctx.accounts.usdc_mint.decimals,
+            PactumError::InvalidDflowAccounts
+        );
+        require!(
+            ctx.accounts.config.open_exposure_usdc
+                >= ctx.accounts.market_exposure.cost_basis_usdc,
+            PactumError::InvalidMarketExposure
+        );
+
+        let outcome_before = ctx.accounts.outcome_account.amount;
+        let usdc_before = ctx.accounts.vault_usdc.amount;
+
+        let ix = Instruction {
+            program_id: dflow::DFLOW_PREDICTION_MARKETS,
+            accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
+                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new(ctx.accounts.settlement_vault.key(), false),
+                AccountMeta::new(ctx.accounts.outcome_account.key(), false),
+                AccountMeta::new(ctx.accounts.vault_usdc.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
+                AccountMeta::new(ctx.accounts.outcome_mint.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.token_2022_program.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+            ],
+            data: dflow::prediction_v1::redeem_market_outcome_data().to_vec(),
+        };
+
+        let authority_bump = [ctx.accounts.config.vault_authority_bump];
+        let authority_seeds: &[&[u8]] = &[b"vault_authority", &authority_bump];
+
+        solana_cpi::invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.event_authority.to_account_info(),
+                ctx.accounts.market_ledger.to_account_info(),
+                ctx.accounts.settlement_vault.to_account_info(),
+                ctx.accounts.outcome_account.to_account_info(),
+                ctx.accounts.vault_usdc.to_account_info(),
+                ctx.accounts.usdc_mint.to_account_info(),
+                ctx.accounts.outcome_mint.to_account_info(),
+                ctx.accounts.vault_authority.to_account_info(),
+                ctx.accounts.token_2022_program.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.dflow_program.to_account_info(),
+            ],
+            &[authority_seeds],
+        )?;
+
+        ctx.accounts.outcome_account.reload()?;
+        ctx.accounts.vault_usdc.reload()?;
+
+        require!(
+            ctx.accounts.outcome_account.amount == 0,
+            PactumError::IncompleteRedemption
+        );
+        let payout = ctx
+            .accounts
+            .vault_usdc
+            .amount
+            .checked_sub(usdc_before)
+            .ok_or(PactumError::MathOverflow)?;
+        require!(
+            payout == outcome_before,
+            PactumError::InvalidRedemptionPayout
+        );
+
+        let closed_cost_basis = ctx.accounts.market_exposure.cost_basis_usdc;
+        ctx.accounts.config.open_exposure_usdc = ctx
+            .accounts
+            .config
+            .open_exposure_usdc
+            .checked_sub(closed_cost_basis)
+            .ok_or(PactumError::MathOverflow)?;
+        ctx.accounts.market_exposure.cost_basis_usdc = 0;
+        ctx.accounts.market_exposure.outcome_atoms = 0;
+
+        emit!(MarketRedeemed {
+            market_ledger: ctx.accounts.market_ledger.key(),
+            outcome_mint: ctx.accounts.outcome_mint.key(),
+            payout_usdc: payout,
+            closed_cost_basis_usdc: closed_cost_basis,
         });
 
         Ok(())
@@ -566,6 +694,103 @@ pub struct Withdraw<'info> {
 }
 
 #[derive(Accounts)]
+pub struct RedeemMarketOutcome<'info> {
+    pub keeper: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.config_bump
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    #[account(
+        seeds = [b"keeper", config.key().as_ref(), keeper.key().as_ref()],
+        bump = keeper_authorization.bump,
+        constraint = keeper_authorization.keeper == keeper.key()
+    )]
+    pub keeper_authorization: Account<'info, KeeperAuthorization>,
+
+    #[account(
+        seeds = [b"market", approved_market.market_ledger.as_ref()],
+        bump = approved_market.bump
+    )]
+    pub approved_market: Account<'info, ApprovedMarket>,
+
+    /// CHECK: external DFlow-owned ledger, pinned to the approved market.
+    #[account(
+        mut,
+        address = approved_market.market_ledger,
+        constraint = *market_ledger.owner == dflow::DFLOW_PREDICTION_MARKETS
+    )]
+    pub market_ledger: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        address = approved_market.settlement_vault,
+        token::mint = usdc_mint,
+        token::authority = market_ledger
+    )]
+    pub settlement_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Pactum PDA that signs DFlow token-authority roles.
+    #[account(
+        seeds = [b"vault_authority"],
+        bump = config.vault_authority_bump
+    )]
+    pub vault_authority: UncheckedAccount<'info>,
+
+    #[account(address = dflow::USDC_MINT)]
+    pub usdc_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        address = config.usdc_vault,
+        token::mint = usdc_mint,
+        token::authority = vault_authority
+    )]
+    pub vault_usdc: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = outcome_account.mint == outcome_mint.key(),
+        constraint = outcome_account.owner == vault_authority.key()
+    )]
+    pub outcome_account: InterfaceAccount<'info, InterfaceTokenAccount>,
+
+    #[account(mut)]
+    pub outcome_mint: InterfaceAccount<'info, InterfaceMint>,
+
+    #[account(
+        mut,
+        seeds = [
+            b"exposure",
+            config.key().as_ref(),
+            approved_market.market_ledger.as_ref(),
+            outcome_mint.key().as_ref()
+        ],
+        bump = market_exposure.bump,
+        constraint = market_exposure.market_ledger == approved_market.market_ledger,
+        constraint = market_exposure.outcome_mint == outcome_mint.key()
+    )]
+    pub market_exposure: Account<'info, MarketExposure>,
+
+    /// CHECK: fixed DFlow event-authority account.
+    #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
+    pub event_authority: UncheckedAccount<'info>,
+
+    /// CHECK: fixed Token-2022 program.
+    #[account(address = dflow::prediction_v1::TOKEN_2022_PROGRAM)]
+    pub token_2022_program: UncheckedAccount<'info>,
+
+    pub token_program: Program<'info, Token>,
+
+    /// CHECK: fixed, executable DFlow prediction-market program.
+    #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
+    pub dflow_program: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
 pub struct BenchmarkNoop {}
 
 #[cfg(feature = "test-hooks")]
@@ -633,4 +858,12 @@ pub struct WithdrawalEvent {
     pub user: Pubkey,
     pub amount: u64,
     pub shares: u64,
+}
+
+#[event]
+pub struct MarketRedeemed {
+    pub market_ledger: Pubkey,
+    pub outcome_mint: Pubkey,
+    pub payout_usdc: u64,
+    pub closed_cost_basis_usdc: u64,
 }
