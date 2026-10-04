@@ -25,10 +25,13 @@ const DFLOW_EVENT_AUTHORITY = new PublicKey(
   "ATZQPakBrumxMrSyuEmrt6NcxBbTR1Ucs99dnPFpBUuM",
 );
 const OPEN_PROBE_MARKET_LEDGER = new PublicKey(
-  "GGViDLxL6RRQ4zTydGoiL6NnLugxyDGraydUBAQfo9iX",
+  "5UHoukpeVPQbmSUaAPWnkXEKZMrjSmwTqqaD8eXmvKNn",
 );
-const OPEN_PROBE_MARKET_USDC = new PublicKey(
-  "BciG3VNEgDihNBcsZYxcJugBw59wQ7xRZAjen6ENaW6h",
+const OPEN_PROBE_YES_MINT = new PublicKey(
+  "CA7FMbzNTfeR7jkLzF113bBJupKwq98cixaQtc3b3frb",
+);
+const OPEN_PROBE_NO_MINT = new PublicKey(
+  "D7ibW7tu2kvzfbDS78gF5i9UZTye7pqTP63yxYd43No3",
 );
 const USDC_MINT = new PublicKey(
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -42,9 +45,7 @@ const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(
 const TOKEN_2022_PROGRAM = new PublicKey(
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
 );
-const FILL_RECONCILE_OUTCOME_MINT = new PublicKey(
-  "4qeSi2JVCbE9VQt1uzTJTpJSKdMFRsqWuvf3UL9fGa2P",
-);
+const FILL_RECONCILE_OUTCOME_MINT = OPEN_PROBE_YES_MINT;
 const OPEN_ORDER_FIXTURE = Buffer.from(
   "4000000000000000" +
     "bb267d4554fc60a6" +
@@ -172,6 +173,98 @@ async function jsonRpc(url, method, params, maxAttempts = 5) {
   }
 
   throw new Error(`${method} failed without a response`);
+}
+
+async function mainnetAccount(pubkey) {
+  const result = await jsonRpc(MAINNET_RPC_URL, "getAccountInfo", [
+    pubkey.toBase58(),
+    { encoding: "base64", commitment: "confirmed" },
+  ]);
+  if (!result?.value) {
+    throw new Error(`mainnet account not found: ${pubkey.toBase58()}`);
+  }
+  return result.value;
+}
+
+async function cloneMainnetAccountToSurfpool(pubkey) {
+  const account = await mainnetAccount(pubkey);
+  const [base64Data] = account.data;
+  await surfpoolRpc("surfnet_setAccount", [
+    pubkey.toBase58(),
+    {
+      lamports: account.lamports,
+      owner: account.owner,
+      executable: account.executable,
+      data: Buffer.from(base64Data, "base64").toString("hex"),
+      rentEpoch: account.rentEpoch,
+    },
+  ]);
+  return account;
+}
+
+async function probeDflowRegistryFixture() {
+  const [ledger, yesMint, noMint] = await Promise.all([
+    mainnetAccount(OPEN_PROBE_MARKET_LEDGER),
+    mainnetAccount(OPEN_PROBE_YES_MINT),
+    mainnetAccount(OPEN_PROBE_NO_MINT),
+  ]);
+
+  if (ledger.owner !== DFLOW_PM.toBase58()) {
+    throw new Error(
+      `DFlow market ledger owner mismatch: ${ledger.owner} != ${DFLOW_PM.toBase58()}`,
+    );
+  }
+  for (const [label, mint] of [
+    ["yes", yesMint],
+    ["no", noMint],
+  ]) {
+    if (mint.owner !== TOKEN_2022_PROGRAM.toBase58()) {
+      throw new Error(
+        `DFlow ${label} mint is not Token-2022: ${mint.owner}`,
+      );
+    }
+  }
+
+  const tokenAccounts = await jsonRpc(
+    MAINNET_RPC_URL,
+    "getTokenAccountsByOwner",
+    [
+      OPEN_PROBE_MARKET_LEDGER.toBase58(),
+      { mint: USDC_MINT.toBase58() },
+      { encoding: "jsonParsed", commitment: "confirmed" },
+    ],
+  );
+  const candidates = tokenAccounts?.value ?? [];
+  if (candidates.length === 0) {
+    throw new Error("DFlow market ledger has no USDC token account");
+  }
+
+  const captured = candidates.find((item) => item.pubkey.startsWith("BFH59"));
+  if (!captured) {
+    throw new Error(
+      `DFlow registry did not resolve the captured BFH59... USDC rail: ${candidates
+        .map((item) => item.pubkey)
+        .join(", ")}`,
+    );
+  }
+  if (captured.account.owner !== SPL_TOKEN_PROGRAM.toBase58()) {
+    throw new Error("DFlow market USDC account is not owned by SPL Token");
+  }
+  const info = captured.account.data?.parsed?.info;
+  if (
+    info?.mint !== USDC_MINT.toBase58() ||
+    info?.owner !== OPEN_PROBE_MARKET_LEDGER.toBase58()
+  ) {
+    throw new Error("DFlow market USDC account mint/authority relationship changed");
+  }
+
+  return {
+    marketLedger: OPEN_PROBE_MARKET_LEDGER,
+    marketUsdc: new PublicKey(captured.pubkey),
+    yesMint: OPEN_PROBE_YES_MINT,
+    noMint: OPEN_PROBE_NO_MINT,
+    ledgerDataLength: Buffer.from(ledger.data[0], "base64").length,
+  };
 }
 
 function resolvedMessageKeys(tx) {
@@ -430,6 +523,16 @@ async function main() {
   }
 
 
+  const dflowRegistry = await probeDflowRegistryFixture();
+  await Promise.all([
+    cloneMainnetAccountToSurfpool(dflowRegistry.marketLedger),
+    cloneMainnetAccountToSurfpool(dflowRegistry.marketUsdc),
+    cloneMainnetAccountToSurfpool(dflowRegistry.yesMint),
+    cloneMainnetAccountToSurfpool(dflowRegistry.noMint),
+    cloneMainnetAccountToSurfpool(DFLOW_EVENT_AUTHORITY),
+  ]);
+  const openProbeMarketUsdc = dflowRegistry.marketUsdc;
+
   const [openProbeAuthority] = PublicKey.findProgramAddressSync(
     [Buffer.from("dflow_open_order_probe")],
     PROGRAM_ID,
@@ -455,7 +558,7 @@ async function main() {
       { pubkey: openProbeAuthority, isSigner: false, isWritable: false },
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
       { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: true },
-      { pubkey: OPEN_PROBE_MARKET_USDC, isSigner: false, isWritable: true },
+      { pubkey: openProbeMarketUsdc, isSigner: false, isWritable: true },
       { pubkey: openProbeOrderAccount, isSigner: false, isWritable: true },
       { pubkey: USDC_MINT, isSigner: false, isWritable: false },
       { pubkey: openProbeSourceUsdc, isSigner: false, isWritable: true },
@@ -562,16 +665,6 @@ async function main() {
   });
   await sendInstructions(connection, payer, initializeVaultIx);
 
-  await surfpoolRpc("surfnet_setAccount", [
-    OPEN_PROBE_MARKET_LEDGER.toBase58(),
-    {
-      lamports: 1_000_000,
-      owner: DFLOW_PM.toBase58(),
-      executable: false,
-      data: "",
-    },
-  ]);
-
   const registerMarketIx = new TransactionInstruction({
     programId: PROGRAM_ID,
     keys: [
@@ -583,9 +676,9 @@ async function main() {
     ],
     data: Buffer.concat([
       anchorDiscriminator("register_market"),
-      OPEN_PROBE_MARKET_USDC.toBuffer(),
-      FILL_RECONCILE_OUTCOME_MINT.toBuffer(),
-      Keypair.generate().publicKey.toBuffer(),
+      openProbeMarketUsdc.toBuffer(),
+      dflowRegistry.yesMint.toBuffer(),
+      dflowRegistry.noMint.toBuffer(),
     ]),
   });
   await sendInstructions(connection, payer, registerMarketIx);
@@ -896,11 +989,18 @@ async function main() {
       computeUnits: pdaProbeCu,
       cuBudget: DFLOW_PDA_PROBE_CU_BUDGET,
     },
+    dflowRegistry: {
+      marketLedger: dflowRegistry.marketLedger.toBase58(),
+      marketUsdcAccount: dflowRegistry.marketUsdc.toBase58(),
+      yesMint: dflowRegistry.yesMint.toBase58(),
+      noMint: dflowRegistry.noMint.toBase58(),
+      ledgerDataLength: dflowRegistry.ledgerDataLength,
+    },
     dflowOpenUserOrderProbe: {
       authority: openProbeAuthority.toBase58(),
       sourceUsdc: openProbeSourceUsdc.toBase58(),
       marketLedger: OPEN_PROBE_MARKET_LEDGER.toBase58(),
-      marketUsdcAccount: OPEN_PROBE_MARKET_USDC.toBase58(),
+      marketUsdcAccount: openProbeMarketUsdc.toBase58(),
       reachedDflow: openProbeReachedDflow,
       signerPrivilegeAccepted: !openProbeSignerEscalation,
       expectedInnerFailure: Boolean(openProbeSim.value.err),
