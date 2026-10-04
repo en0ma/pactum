@@ -8,6 +8,8 @@ import {
   TransactionInstruction,
 } from "@solana/web3.js";
 
+import { requireRpcMetric } from "./metric-guard.mjs";
+
 const RPC_URL = process.env.SURFPOOL_RPC_URL ?? "http://127.0.0.1:8899";
 const PROGRAM_ID = new PublicKey(
   process.env.PACTUM_PROGRAM_ID ?? "AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw",
@@ -71,13 +73,13 @@ async function main() {
     throw new Error(`benchmark_noop simulation failed: ${JSON.stringify(noopSim.value.err)}`);
   }
 
-  const noopCu = noopSim.value.unitsConsumed ?? 0;
+  const noopCu = requireRpcMetric(noopSim.value.unitsConsumed, "benchmark_noop.unitsConsumed");
   if (noopCu > NOOP_CU_BUDGET) {
     throw new Error(`benchmark_noop CU regression: ${noopCu} > ${NOOP_CU_BUDGET}`);
   }
 
   const fee = await connection.getFeeForMessage(noopTx.compileMessage());
-  const baseFee = fee.value ?? 0;
+  const baseFee = requireRpcMetric(fee.value, "getFeeForMessage.value");
   if (baseFee > BASE_FEE_BUDGET_LAMPORTS) {
     throw new Error(
       `base fee regression: ${baseFee} > ${BASE_FEE_BUDGET_LAMPORTS} lamports`,
@@ -116,7 +118,7 @@ async function main() {
     throw new Error("DFlow CPI probe unexpectedly succeeded; review the smoke-test ABI");
   }
 
-  const probeCu = probeSim.value.unitsConsumed ?? 0;
+  const probeCu = requireRpcMetric(probeSim.value.unitsConsumed, "dflow_probe.unitsConsumed");
   if (probeCu > DFLOW_PROBE_CU_BUDGET) {
     throw new Error(
       `DFlow CPI probe CU regression: ${probeCu} > ${DFLOW_PROBE_CU_BUDGET}`,
