@@ -38,6 +38,10 @@ pub enum PactumError {
     InvalidSlippage,
     #[msg("The expected DFlow fill is not yet reflected in the PDA-owned outcome ATA")]
     DflowFillNotObserved,
+    #[msg("The DFlow order account has not reached a verifiable terminal closed state")]
+    DflowOrderNotTerminal,
+    #[msg("The DFlow terminal refund does not match the reserved order cost basis")]
+    InvalidDflowRefund,
     #[msg("Tracked market exposure does not match the redeemable position")]
     InvalidMarketExposure,
     #[msg("DFlow redemption did not burn the complete tracked outcome position")]
