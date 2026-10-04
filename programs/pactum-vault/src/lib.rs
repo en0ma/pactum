@@ -541,7 +541,7 @@ pub struct InitializeVault<'info> {
         bump,
         space = 8 + VaultConfig::LEN
     )]
-    pub config: Box<Account<'info, VaultConfig>>,
+    pub config: Account<'info, VaultConfig>,
 
     /// CHECK: PDA used only as the authority over Pactum-owned token accounts.
     #[account(seeds = [b"vault_authority"], bump)]
@@ -558,7 +558,7 @@ pub struct InitializeVault<'info> {
         token::mint = usdc_mint,
         token::authority = vault_authority
     )]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -601,7 +601,7 @@ pub struct RegisterMarket<'info> {
         bump,
         space = 8 + ApprovedMarket::LEN
     )]
-    pub approved_market: Box<Account<'info, ApprovedMarket>>,
+    pub approved_market: Account<'info, ApprovedMarket>,
 
     pub system_program: Program<'info, System>,
 }
@@ -647,7 +647,7 @@ pub struct AuthorizeKeeper<'info> {
         bump,
         space = 8 + KeeperAuthorization::LEN
     )]
-    pub keeper_authorization: Box<Account<'info, KeeperAuthorization>>,
+    pub keeper_authorization: Account<'info, KeeperAuthorization>,
 
     pub system_program: Program<'info, System>,
 }
@@ -783,20 +783,20 @@ pub struct RedeemMarketOutcome<'info> {
         seeds = [b"config"],
         bump = config.config_bump
     )]
-    pub config: Account<'info, VaultConfig>,
+    pub config: Box<Account<'info, VaultConfig>>,
 
     #[account(
         seeds = [b"keeper", config.key().as_ref(), keeper.key().as_ref()],
         bump = keeper_authorization.bump,
         constraint = keeper_authorization.keeper == keeper.key()
     )]
-    pub keeper_authorization: Account<'info, KeeperAuthorization>,
+    pub keeper_authorization: Box<Account<'info, KeeperAuthorization>>,
 
     #[account(
         seeds = [b"market", approved_market.market_ledger.as_ref()],
         bump = approved_market.bump
     )]
-    pub approved_market: Account<'info, ApprovedMarket>,
+    pub approved_market: Box<Account<'info, ApprovedMarket>>,
 
     /// CHECK: external DFlow-owned ledger, pinned to the approved market.
     #[account(
@@ -822,7 +822,7 @@ pub struct RedeemMarketOutcome<'info> {
     pub vault_authority: UncheckedAccount<'info>,
 
     #[account(address = dflow::USDC_MINT)]
-    pub usdc_mint: Account<'info, Mint>,
+    pub usdc_mint: Box<Account<'info, Mint>>,
 
     #[account(
         mut,
@@ -830,7 +830,7 @@ pub struct RedeemMarketOutcome<'info> {
         token::mint = usdc_mint,
         token::authority = vault_authority
     )]
-    pub vault_usdc: Account<'info, TokenAccount>,
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
