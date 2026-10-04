@@ -317,8 +317,7 @@ pub mod pactum_vault {
             PactumError::InvalidDflowAccounts
         );
         require!(
-            ctx.accounts.config.open_exposure_usdc
-                >= ctx.accounts.market_exposure.cost_basis_usdc,
+            ctx.accounts.config.open_exposure_usdc >= ctx.accounts.market_exposure.cost_basis_usdc,
             PactumError::InvalidMarketExposure
         );
 
@@ -415,7 +414,10 @@ pub mod pactum_vault {
         outcome_atoms: u64,
     ) -> Result<()> {
         require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
-        require!(cost_basis_usdc > 0 && outcome_atoms > 0, PactumError::ZeroAmount);
+        require!(
+            cost_basis_usdc > 0 && outcome_atoms > 0,
+            PactumError::ZeroAmount
+        );
         math::validate_trade_amount(
             cost_basis_usdc,
             ctx.accounts.config.open_exposure_usdc,
@@ -423,7 +425,10 @@ pub mod pactum_vault {
             ctx.accounts.config.max_total_exposure_usdc,
         )?;
 
-        require!(ctx.accounts.approved_market.enabled, PactumError::MarketDisabled);
+        require!(
+            ctx.accounts.approved_market.enabled,
+            PactumError::MarketDisabled
+        );
         let _side = dflow::prediction_v1::OutcomeSide::from_mint(
             &ctx.accounts.approved_market,
             ctx.accounts.outcome_mint.key(),
