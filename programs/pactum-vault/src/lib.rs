@@ -993,7 +993,7 @@ fn sweep_terminal_refund<'info>(
 
     token::transfer_checked(
         CpiContext::new_with_signer(
-            token_program.to_account_info(),
+            token_program.key(),
             TransferChecked {
                 from: refund_usdc_ata.to_account_info(),
                 mint: usdc_mint.to_account_info(),
