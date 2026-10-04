@@ -4,6 +4,7 @@ import {
   Connection,
   Keypair,
   PublicKey,
+  SystemProgram,
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
@@ -21,6 +22,9 @@ const DFLOW_PM = new PublicKey(
 const NOOP_CU_BUDGET = Number(process.env.PACTUM_NOOP_CU_BUDGET ?? "12000");
 const DFLOW_PROBE_CU_BUDGET = Number(
   process.env.PACTUM_DFLOW_PROBE_CU_BUDGET ?? "80000",
+);
+const DFLOW_PDA_PROBE_CU_BUDGET = Number(
+  process.env.PACTUM_DFLOW_PDA_PROBE_CU_BUDGET ?? "80000",
 );
 const BASE_FEE_BUDGET_LAMPORTS = Number(
   process.env.PACTUM_BASE_FEE_BUDGET_LAMPORTS ?? "10000",
@@ -125,6 +129,61 @@ async function main() {
     );
   }
 
+  const [probeAuthority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("dflow_cpi_probe")],
+    PROGRAM_ID,
+  );
+
+  const pdaProbeIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: probeAuthority, isSigner: false, isWritable: true },
+      { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("probe_dflow_pda_signed_cpi"),
+  });
+
+  const pdaProbeTx = new Transaction({
+    feePayer: payer.publicKey,
+    recentBlockhash: blockhash,
+  }).add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+    SystemProgram.transfer({
+      fromPubkey: payer.publicKey,
+      toPubkey: probeAuthority,
+      lamports: 1,
+    }),
+    pdaProbeIx,
+  );
+  pdaProbeTx.sign(payer);
+
+  const pdaProbeSim = await connection.simulateTransaction(pdaProbeTx);
+  const pdaProbeLogs = pdaProbeSim.value.logs ?? [];
+  const pdaReachedDflow = pdaProbeLogs.some((line) =>
+    line.includes(`Program ${DFLOW_PM.toBase58()} invoke [2]`),
+  );
+  const signerEscalationRejected = pdaProbeLogs.some((line) =>
+    line.toLowerCase().includes("signer privilege escalated"),
+  );
+
+  if (!pdaReachedDflow || signerEscalationRejected) {
+    console.error(pdaProbeLogs.join("\n"));
+    throw new Error("PDA-signed CPI did not enter DFlow with accepted signer privilege");
+  }
+  if (!pdaProbeSim.value.err) {
+    throw new Error("PDA-signed DFlow probe unexpectedly succeeded; review probe assumptions");
+  }
+
+  const pdaProbeCu = requireRpcMetric(
+    pdaProbeSim.value.unitsConsumed,
+    "dflow_pda_probe.unitsConsumed",
+  );
+  if (pdaProbeCu > DFLOW_PDA_PROBE_CU_BUDGET) {
+    throw new Error(
+      `PDA-signed DFlow probe CU regression: ${pdaProbeCu} > ${DFLOW_PDA_PROBE_CU_BUDGET}`,
+    );
+  }
+
   console.log(JSON.stringify({
     rpc: RPC_URL,
     pactumProgram: PROGRAM_ID.toBase58(),
@@ -140,6 +199,14 @@ async function main() {
       expectedInnerFailure: true,
       computeUnits: probeCu,
       cuBudget: DFLOW_PROBE_CU_BUDGET,
+    },
+    dflowPdaSignedProbe: {
+      authority: probeAuthority.toBase58(),
+      reachedDflow: pdaReachedDflow,
+      signerPrivilegeAccepted: !signerEscalationRejected,
+      expectedInnerFailure: true,
+      computeUnits: pdaProbeCu,
+      cuBudget: DFLOW_PDA_PROBE_CU_BUDGET,
     },
   }, null, 2));
 }
