@@ -309,7 +309,7 @@ pub mod pactum_vault {
             PactumError::InvalidMarketExposure
         );
         require!(
-            ctx.accounts.market_exposure.outcome_atoms == ctx.accounts.outcome_account.amount,
+            ctx.accounts.outcome_account.amount >= ctx.accounts.market_exposure.outcome_atoms,
             PactumError::InvalidMarketExposure
         );
         require!(
@@ -377,7 +377,7 @@ pub mod pactum_vault {
             .checked_sub(usdc_before)
             .ok_or(PactumError::MathOverflow)?;
         require!(
-            payout == outcome_before,
+            payout == 0 || payout == outcome_before,
             PactumError::InvalidRedemptionPayout
         );
 
@@ -394,6 +394,7 @@ pub mod pactum_vault {
         emit!(MarketRedeemed {
             market_ledger: ctx.accounts.market_ledger.key(),
             outcome_mint: ctx.accounts.outcome_mint.key(),
+            redeemed_outcome_atoms: outcome_before,
             payout_usdc: payout,
             closed_cost_basis_usdc: closed_cost_basis,
         });
@@ -936,6 +937,7 @@ pub struct WithdrawalEvent {
 pub struct MarketRedeemed {
     pub market_ledger: Pubkey,
     pub outcome_mint: Pubkey,
+    pub redeemed_outcome_atoms: u64,
     pub payout_usdc: u64,
     pub closed_cost_basis_usdc: u64,
 }
