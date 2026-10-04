@@ -77,7 +77,6 @@ impl MarketExposure {
     pub const LEN: usize = 32 + 32 + 8 + 8 + 1;
 }
 
-
 #[account]
 pub struct PendingDflowOrder {
     pub order_account: Pubkey,
