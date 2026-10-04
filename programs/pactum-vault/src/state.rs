@@ -61,3 +61,19 @@ pub struct ApprovedMarket {
 impl ApprovedMarket {
     pub const LEN: usize = 32 + 32 + 32 + 32 + 1 + 1;
 }
+
+
+#[account]
+pub struct MarketExposure {
+    pub market_ledger: Pubkey,
+    pub outcome_mint: Pubkey,
+    /// USDC atoms originally committed to this position.
+    pub cost_basis_usdc: u64,
+    /// Outcome-token atoms expected to be redeemed on full settlement.
+    pub outcome_atoms: u64,
+    pub bump: u8,
+}
+
+impl MarketExposure {
+    pub const LEN: usize = 32 + 32 + 8 + 8 + 1;
+}
