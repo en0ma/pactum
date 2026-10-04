@@ -466,8 +466,6 @@ pub mod pactum_vault {
             .cost_basis_usdc
             .checked_sub(recognized_refund_usdc)
             .ok_or(PactumError::MathOverflow)?;
-        require!(consumed_usdc > 0, PactumError::InvalidDflowRefund);
-
         let minimum_outcome_atoms = dflow::prediction_v1::minimum_outcome_for_consumed_input(
             ctx.accounts.pending_order.quoted_outcome_atoms,
             ctx.accounts.pending_order.cost_basis_usdc,
@@ -540,6 +538,14 @@ pub mod pactum_vault {
     pub fn unwind_dflow_order(ctx: Context<UnwindDflowOrder>) -> Result<()> {
         require_dflow_order_closed(&ctx.accounts.order_account)?;
 
+        let outcome_delta = ctx
+            .accounts
+            .outcome_ata
+            .amount
+            .checked_sub(ctx.accounts.pending_order.outcome_balance_start)
+            .ok_or(PactumError::MathOverflow)?;
+        require!(outcome_delta == 0, PactumError::InvalidDflowRefund);
+
         let refund_usdc = ctx
             .accounts
             .refund_usdc_ata
@@ -584,6 +590,12 @@ pub mod pactum_vault {
     /// This is deliberately available while paused and after a market is
     /// disabled so settlement/recovery cannot be administratively deadlocked.
     pub fn redeem_market_outcome(ctx: Context<RedeemMarketOutcome>) -> Result<()> {
+        require!(
+            ctx.accounts.pending_order.lamports() == 0
+                && ctx.accounts.pending_order.data_is_empty(),
+            PactumError::DflowOrderNotTerminal
+        );
+
         let side = dflow::prediction_v1::OutcomeSide::from_mint(
             &ctx.accounts.approved_market,
             ctx.accounts.outcome_mint.key(),
@@ -610,8 +622,7 @@ pub mod pactum_vault {
         )?;
 
         require!(
-            ctx.accounts.market_exposure.cost_basis_usdc > 0
-                && ctx.accounts.market_exposure.outcome_atoms > 0,
+            ctx.accounts.market_exposure.outcome_atoms > 0,
             PactumError::InvalidMarketExposure
         );
         math::validate_redeem_position(
@@ -1586,6 +1597,13 @@ pub struct RedeemMarketOutcome<'info> {
         constraint = market_exposure.outcome_mint == outcome_mint.key()
     )]
     pub market_exposure: Box<Account<'info, MarketExposure>>,
+
+    /// CHECK: singleton pending-order PDA. Redemption requires this account to be absent.
+    #[account(
+        seeds = [b"pending_order", config.key().as_ref()],
+        bump
+    )]
+    pub pending_order: UncheckedAccount<'info>,
 
     /// CHECK: fixed DFlow event-authority account.
     #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
