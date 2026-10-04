@@ -48,6 +48,22 @@ pub fn validate_risk_limits(max_trade_usdc: u64, max_total_exposure_usdc: u64) -
     Ok(())
 }
 
+pub fn validate_redeem_position(tracked_outcome_atoms: u64, account_balance: u64) -> Result<()> {
+    require!(
+        tracked_outcome_atoms > 0 && account_balance >= tracked_outcome_atoms,
+        PactumError::InvalidMarketExposure
+    );
+    Ok(())
+}
+
+pub fn validate_terminal_redemption_payout(redeemed_outcome_atoms: u64, payout_usdc: u64) -> Result<()> {
+    require!(
+        redeemed_outcome_atoms > 0 && (payout_usdc == 0 || payout_usdc == redeemed_outcome_atoms),
+        PactumError::InvalidRedemptionPayout
+    );
+    Ok(())
+}
+
 pub fn validate_trade_amount(
     amount: u64,
     open_exposure_usdc: u64,
@@ -116,6 +132,24 @@ mod tests {
     #[test]
     fn trade_validation_rejects_aggregate_limit() {
         assert!(validate_trade_amount(250_000, 900_000, 300_000, 1_000_000).is_err());
+    }
+
+    #[test]
+    fn redeem_position_accepts_unsolicited_outcome_tokens() {
+        validate_redeem_position(5_000_000, 5_000_001).unwrap();
+    }
+
+    #[test]
+    fn redeem_position_rejects_balance_below_tracked_position() {
+        assert!(validate_redeem_position(5_000_000, 4_999_999).is_err());
+    }
+
+    #[test]
+    fn terminal_redemption_accepts_win_or_loss_only() {
+        validate_terminal_redemption_payout(5_000_000, 5_000_000).unwrap();
+        validate_terminal_redemption_payout(5_000_000, 0).unwrap();
+        assert!(validate_terminal_redemption_payout(5_000_000, 1).is_err());
+        assert!(validate_terminal_redemption_payout(5_000_000, 4_999_999).is_err());
     }
 
     proptest! {
