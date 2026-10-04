@@ -409,6 +409,7 @@ pub mod pactum_vault {
         pending.cost_basis_usdc = input_amount;
         pending.quoted_outcome_atoms = decoded.quoted_output_amount;
         pending.outcome_balance_before = outcome_balance_before;
+        pending.filled_outcome_atoms = 0;
         pending.slippage_bps = slippage_bps;
         pending.bump = ctx.bumps.pending_order;
 
@@ -438,16 +439,12 @@ pub mod pactum_vault {
     /// instruction does not trust keeper-provided fill amounts or API events.
     pub fn reconcile_dflow_fill(ctx: Context<ReconcileDflowFill>) -> Result<()> {
         let current_outcome_balance = ctx.accounts.outcome_ata.amount;
-        let filled_outcome_atoms = current_outcome_balance
+        let newly_filled_outcome_atoms = current_outcome_balance
             .checked_sub(ctx.accounts.pending_order.outcome_balance_before)
             .ok_or(PactumError::MathOverflow)?;
 
-        let min_outcome_atoms = dflow::prediction_v1::minimum_outcome_atoms(
-            ctx.accounts.pending_order.quoted_outcome_atoms,
-            ctx.accounts.pending_order.slippage_bps,
-        )?;
         require!(
-            filled_outcome_atoms >= min_outcome_atoms && filled_outcome_atoms > 0,
+            newly_filled_outcome_atoms > 0,
             PactumError::DflowFillNotObserved
         );
 
@@ -462,40 +459,20 @@ pub mod pactum_vault {
             PactumError::InvalidDflowAccounts
         );
 
-        let exposure = &mut ctx.accounts.market_exposure;
-        if exposure.market_ledger == Pubkey::default() {
-            exposure.market_ledger = ctx.accounts.approved_market.market_ledger;
-            exposure.outcome_mint = ctx.accounts.outcome_mint.key();
-            exposure.bump = ctx.bumps.market_exposure;
-        } else {
-            require_keys_eq!(
-                exposure.market_ledger,
-                ctx.accounts.approved_market.market_ledger,
-                PactumError::InvalidMarketExposure
-            );
-            require_keys_eq!(
-                exposure.outcome_mint,
-                ctx.accounts.outcome_mint.key(),
-                PactumError::InvalidMarketExposure
-            );
-        }
-
-        exposure.cost_basis_usdc = exposure
-            .cost_basis_usdc
-            .checked_add(ctx.accounts.pending_order.cost_basis_usdc)
+        let pending = &mut ctx.accounts.pending_order;
+        pending.filled_outcome_atoms = pending
+            .filled_outcome_atoms
+            .checked_add(newly_filled_outcome_atoms)
             .ok_or(PactumError::MathOverflow)?;
-        exposure.outcome_atoms = exposure
-            .outcome_atoms
-            .checked_add(filled_outcome_atoms)
-            .ok_or(PactumError::MathOverflow)?;
+        pending.outcome_balance_before = current_outcome_balance;
 
-        emit!(DflowOrderFilled {
+        emit!(DflowOrderFillObserved {
             keeper: ctx.accounts.keeper.key(),
-            order_account: ctx.accounts.pending_order.order_account,
-            market_ledger: exposure.market_ledger,
-            outcome_mint: exposure.outcome_mint,
-            cost_basis_usdc: ctx.accounts.pending_order.cost_basis_usdc,
-            filled_outcome_atoms,
+            order_account: pending.order_account,
+            market_ledger: pending.market_ledger,
+            outcome_mint: pending.outcome_mint,
+            newly_filled_outcome_atoms,
+            cumulative_filled_outcome_atoms: pending.filled_outcome_atoms,
         });
 
         Ok(())
@@ -725,10 +702,7 @@ pub mod pactum_vault {
         slippage_bps: u16,
     ) -> Result<()> {
         require!(cost_basis_usdc > 0, PactumError::ZeroAmount);
-        let _ = dflow::prediction_v1::minimum_outcome_atoms(
-            quoted_outcome_atoms,
-            slippage_bps,
-        )?;
+        let _ = dflow::prediction_v1::minimum_outcome_atoms(quoted_outcome_atoms, slippage_bps)?;
 
         let pending = &mut ctx.accounts.pending_order;
         pending.order_account = ctx.accounts.order_account.key();
@@ -737,6 +711,7 @@ pub mod pactum_vault {
         pending.cost_basis_usdc = cost_basis_usdc;
         pending.quoted_outcome_atoms = quoted_outcome_atoms;
         pending.outcome_balance_before = outcome_balance_before;
+        pending.filled_outcome_atoms = 0;
         pending.slippage_bps = slippage_bps;
         pending.bump = ctx.bumps.pending_order;
 
@@ -1247,7 +1222,6 @@ pub struct ReconcileDflowFill<'info> {
 
     #[account(
         mut,
-        close = keeper,
         seeds = [
             b"pending_order",
             config.key().as_ref(),
@@ -1259,20 +1233,6 @@ pub struct ReconcileDflowFill<'info> {
         constraint = pending_order.outcome_mint == outcome_mint.key()
     )]
     pub pending_order: Box<Account<'info, PendingDflowOrder>>,
-
-    #[account(
-        init_if_needed,
-        payer = keeper,
-        seeds = [
-            b"exposure",
-            config.key().as_ref(),
-            approved_market.market_ledger.as_ref(),
-            outcome_mint.key().as_ref()
-        ],
-        bump,
-        space = 8 + MarketExposure::LEN
-    )]
-    pub market_exposure: Box<Account<'info, MarketExposure>>,
 
     pub token_2022_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -1616,13 +1576,13 @@ pub struct DflowOrderOpened {
 }
 
 #[event]
-pub struct DflowOrderFilled {
+pub struct DflowOrderFillObserved {
     pub keeper: Pubkey,
     pub order_account: Pubkey,
     pub market_ledger: Pubkey,
     pub outcome_mint: Pubkey,
-    pub cost_basis_usdc: u64,
-    pub filled_outcome_atoms: u64,
+    pub newly_filled_outcome_atoms: u64,
+    pub cumulative_filled_outcome_atoms: u64,
 }
 
 #[event]
