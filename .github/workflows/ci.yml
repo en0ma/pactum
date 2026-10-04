@@ -1,0 +1,135 @@
+name: protocol-ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pactum-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  ANCHOR_VERSION: "1.1.2"
+  SOLANA_VERSION: "3.1.10"
+  PACTUM_BYTECODE_BUDGET_BYTES: "600000"
+
+jobs:
+  build:
+    name: Build and lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Solana/Agave
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/solana-foundation/anchor avm --force
+          avm install ${ANCHOR_VERSION}
+          avm use ${ANCHOR_VERSION}
+          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+
+      - name: Generate ephemeral program key and sync
+        run: |
+          mkdir -p target/deploy
+          solana-keygen new --no-bip39-passphrase --silent -o target/deploy/pactum_vault-keypair.json
+          anchor keys sync
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust unit and property tests
+        run: cargo test --workspace
+
+      - name: JavaScript unit tests
+        run: npm install --no-audit --no-fund && npm run test:js
+
+      - name: Build production program
+        run: anchor build
+
+      - name: Enforce program bytecode budget
+        run: |
+          size_bytes="$(stat -c%s target/deploy/pactum_vault.so)"
+          echo "pactum_vault.so: ${size_bytes} bytes (budget: ${PACTUM_BYTECODE_BUDGET_BYTES})"
+          test "${size_bytes}" -le "${PACTUM_BYTECODE_BUDGET_BYTES}"
+
+      - name: Build fork test hooks
+        run: anchor build -- --features test-hooks
+
+  mainnet-fork:
+    name: Mainnet fork / DFlow CPI / CU budgets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    needs: build
+
+    env:
+      MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL || 'https://api.mainnet-beta.solana.com' }}
+      PACTUM_NOOP_CU_BUDGET: "12000"
+      PACTUM_DFLOW_PROBE_CU_BUDGET: "80000"
+      PACTUM_BASE_FEE_BUDGET_LAMPORTS: "10000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Solana/Agave
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/solana-foundation/anchor avm --force
+          avm install ${ANCHOR_VERSION}
+          avm use ${ANCHOR_VERSION}
+          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+
+      - name: Install Surfpool
+        run: |
+          curl -sL https://run.surfpool.run/ | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run fork tests
+        run: bash scripts/run-fork-ci.sh

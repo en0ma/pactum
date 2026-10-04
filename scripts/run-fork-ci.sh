@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export SURFPOOL_RPC_URL="${SURFPOOL_RPC_URL:-http://127.0.0.1:8899}"
+export MAINNET_RPC_URL="${MAINNET_RPC_URL:-https://api.mainnet-beta.solana.com}"
+
+mkdir -p .anchor target/deploy ~/.config/solana
+
+if [[ ! -f ~/.config/solana/id.json ]]; then
+  solana-keygen new --no-bip39-passphrase --silent -o ~/.config/solana/id.json
+fi
+
+if [[ ! -f target/deploy/pactum_vault-keypair.json ]]; then
+  solana-keygen new --no-bip39-passphrase --silent -o target/deploy/pactum_vault-keypair.json
+fi
+
+# Anchor 1.x checks source/program-id consistency. Sync the checked-in
+# placeholder to the ephemeral CI deployment key before building.
+anchor keys sync
+anchor build -- --features test-hooks
+
+echo "Starting Surfpool mainnet fork..."
+NO_DNA=1 surfpool start   --ci   --daemon   --rpc-url "$MAINNET_RPC_URL"
+
+for _ in $(seq 1 60); do
+  if curl -sf "$SURFPOOL_RPC_URL"     -H 'Content-Type: application/json'     -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}'     | grep -q '"ok"'; then
+    break
+  fi
+  sleep 1
+done
+
+solana config set --url "$SURFPOOL_RPC_URL" >/dev/null
+solana airdrop 10 >/dev/null
+
+PROGRAM_ID="$(solana-keygen pubkey target/deploy/pactum_vault-keypair.json)"
+export PACTUM_PROGRAM_ID="$PROGRAM_ID"
+
+solana program deploy   --url "$SURFPOOL_RPC_URL"   --program-id target/deploy/pactum_vault-keypair.json   target/deploy/pactum_vault.so
+
+npm run test:fork
