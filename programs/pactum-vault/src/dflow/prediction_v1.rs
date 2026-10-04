@@ -153,27 +153,31 @@ pub fn validate_open_order_keys(
     Ok(())
 }
 
+pub fn minimum_outcome_atoms(quoted_outcome_atoms: u64, slippage_bps: u16) -> Result<u64> {
+    require!(
+        slippage_bps <= MAX_TRADE_SLIPPAGE_BPS,
+        PactumError::InvalidSlippage
+    );
+
+    quoted_outcome_atoms
+        .checked_mul(BPS_DENOMINATOR - u64::from(slippage_bps))
+        .ok_or(PactumError::MathOverflow)
+        .map(|value| value / BPS_DENOMINATOR)
+}
+
 pub fn validate_open_order_data(
     data: &[u8],
     expected_input_amount: u64,
     quoted_outcome_atoms: u64,
     slippage_bps: u16,
 ) -> Result<ObservedOpenOrder> {
-    require!(
-        slippage_bps <= MAX_TRADE_SLIPPAGE_BPS,
-        PactumError::InvalidSlippage
-    );
-
     let decoded = decode_observed_open_order(data)?;
     require!(
         decoded.input_amount == expected_input_amount,
         PactumError::InvalidDflowFixture
     );
 
-    let min_outcome_atoms = quoted_outcome_atoms
-        .checked_mul(BPS_DENOMINATOR - u64::from(slippage_bps))
-        .ok_or(PactumError::MathOverflow)?
-        / BPS_DENOMINATOR;
+    let min_outcome_atoms = minimum_outcome_atoms(quoted_outcome_atoms, slippage_bps)?;
 
     require!(
         decoded.quoted_output_amount >= min_outcome_atoms,
@@ -360,6 +364,12 @@ mod tests {
         };
 
         assert!(validate_open_order_keys(&keys, &market, vault_usdc, vault_authority,).is_err());
+    }
+
+    #[test]
+    fn computes_minimum_outcome_atoms() {
+        assert_eq!(minimum_outcome_atoms(11_000_000, 50).unwrap(), 10_945_000);
+        assert!(minimum_outcome_atoms(11_000_000, MAX_TRADE_SLIPPAGE_BPS + 1).is_err());
     }
 
     #[test]
