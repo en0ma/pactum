@@ -73,7 +73,13 @@ jobs:
         run: npm install --no-audit --no-fund && npm run test:js
 
       - name: Build production program
-        run: anchor build
+        run: |
+          set -o pipefail
+          anchor build 2>&1 | tee /tmp/pactum-anchor-production.log
+          if grep -q "Stack offset of .* exceeded max offset" /tmp/pactum-anchor-production.log; then
+            echo "SBF stack frame exceeded runtime limit"
+            exit 1
+          fi
 
       - name: Enforce program bytecode budget
         run: |
@@ -82,7 +88,13 @@ jobs:
           test "${size_bytes}" -le "${PACTUM_BYTECODE_BUDGET_BYTES}"
 
       - name: Build fork test hooks
-        run: anchor build -- --features test-hooks
+        run: |
+          set -o pipefail
+          anchor build -- --features test-hooks 2>&1 | tee /tmp/pactum-anchor-test-hooks.log
+          if grep -q "Stack offset of .* exceeded max offset" /tmp/pactum-anchor-test-hooks.log; then
+            echo "SBF stack frame exceeded runtime limit"
+            exit 1
+          fi
 
   mainnet-fork:
     name: Mainnet fork / DFlow CPI / CU budgets

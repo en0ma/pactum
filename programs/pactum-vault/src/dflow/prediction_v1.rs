@@ -33,6 +33,16 @@ impl OutcomeSide {
             Self::No => market.no_mint,
         }
     }
+
+    pub fn from_mint(market: &ApprovedMarket, mint: Pubkey) -> Result<Self> {
+        if mint == market.yes_mint {
+            Ok(Self::Yes)
+        } else if mint == market.no_mint {
+            Ok(Self::No)
+        } else {
+            err!(PactumError::InvalidDflowAccounts)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +157,6 @@ pub fn validate_redeem_keys(
     vault_usdc: Pubkey,
     vault_authority: Pubkey,
 ) -> Result<()> {
-    require!(market.enabled, PactumError::MarketDisabled);
     require_keys_eq!(
         keys.event_authority,
         EVENT_AUTHORITY,
@@ -194,6 +203,10 @@ pub fn validate_redeem_keys(
         PactumError::InvalidDflowAccounts
     );
     Ok(())
+}
+
+pub fn redeem_market_outcome_data() -> [u8; REDEEM_MARKET_OUTCOME_DATA_LEN] {
+    REDEEM_MARKET_OUTCOME_ACTION.to_le_bytes()
 }
 
 pub fn validate_redeem_data(data: &[u8]) -> Result<()> {
@@ -253,7 +266,39 @@ mod tests {
 
     #[test]
     fn accepts_confirmed_redeem_action() {
-        validate_redeem_data(&REDEEM_MARKET_OUTCOME_ACTION.to_le_bytes()).unwrap();
+        let data = redeem_market_outcome_data();
+        assert_eq!(data, REDEEM_MARKET_OUTCOME_ACTION.to_le_bytes());
+        validate_redeem_data(&data).unwrap();
+    }
+
+    #[test]
+    fn redeem_remains_available_when_market_is_disabled() {
+        let mut market = market();
+        market.enabled = false;
+        let vault_usdc = Pubkey::new_unique();
+        let vault_authority = Pubkey::new_unique();
+
+        let keys = RedeemKeys {
+            event_authority: EVENT_AUTHORITY,
+            market_ledger: market.market_ledger,
+            settlement_vault: market.settlement_vault,
+            outcome_account: Pubkey::new_unique(),
+            settlement_destination: vault_usdc,
+            usdc_mint: crate::dflow::USDC_MINT,
+            outcome_mint: market.yes_mint,
+            token_authority: vault_authority,
+            token_2022_program: TOKEN_2022_PROGRAM,
+            token_program: SPL_TOKEN_PROGRAM,
+        };
+
+        validate_redeem_keys(
+            &keys,
+            &market,
+            OutcomeSide::Yes,
+            vault_usdc,
+            vault_authority,
+        )
+        .unwrap();
     }
 
     #[test]

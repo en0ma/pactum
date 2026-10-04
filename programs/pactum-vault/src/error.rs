@@ -32,4 +32,10 @@ pub enum PactumError {
     InvalidDflowFixture,
     #[msg("DFlow accounts do not match Pactum's approved market/custody constraints")]
     InvalidDflowAccounts,
+    #[msg("Tracked market exposure does not match the redeemable position")]
+    InvalidMarketExposure,
+    #[msg("DFlow redemption did not burn the complete tracked outcome position")]
+    IncompleteRedemption,
+    #[msg("DFlow redemption payout did not match the redeemed winning outcome amount")]
+    InvalidRedemptionPayout,
 }
