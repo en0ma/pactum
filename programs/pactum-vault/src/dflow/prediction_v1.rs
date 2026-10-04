@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
+use solana_pubkey::pubkey;
 
-use crate::error::PactumError;
+use crate::{error::PactumError, state::ApprovedMarket};
 
 /// Observed action/discriminator values from confirmed mainnet transactions.
 ///
@@ -14,10 +15,61 @@ pub const OPEN_USER_ORDER_DATA_LEN: usize = 80;
 pub const FILL_USER_ORDER_DATA_LEN: usize = 32;
 pub const REDEEM_MARKET_OUTCOME_DATA_LEN: usize = 8;
 
+pub const EVENT_AUTHORITY: Pubkey =
+    pubkey!("ATZQPakBrumxMrSyuEmrt6NcxBbTR1Ucs99dnPFpBUuM");
+pub const TOKEN_2022_PROGRAM: Pubkey =
+    pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+pub const SPL_TOKEN_PROGRAM: Pubkey =
+    pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+pub const SYSTEM_PROGRAM: Pubkey =
+    pubkey!("11111111111111111111111111111111");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutcomeSide {
+    Yes,
+    No,
+}
+
+impl OutcomeSide {
+    pub fn mint(self, market: &ApprovedMarket) -> Pubkey {
+        match self {
+            Self::Yes => market.yes_mint,
+            Self::No => market.no_mint,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObservedOpenOrder {
     pub input_amount: u64,
     pub quoted_output_amount: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenOrderKeys {
+    pub event_authority: Pubkey,
+    pub market_ledger: Pubkey,
+    pub market_usdc_account: Pubkey,
+    pub order_account: Pubkey,
+    pub usdc_mint: Pubkey,
+    pub source_usdc: Pubkey,
+    pub token_authority: Pubkey,
+    pub token_program: Pubkey,
+    pub system_program: Pubkey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RedeemKeys {
+    pub event_authority: Pubkey,
+    pub market_ledger: Pubkey,
+    pub settlement_vault: Pubkey,
+    pub outcome_account: Pubkey,
+    pub settlement_destination: Pubkey,
+    pub usdc_mint: Pubkey,
+    pub outcome_mint: Pubkey,
+    pub token_authority: Pubkey,
+    pub token_2022_program: Pubkey,
+    pub token_program: Pubkey,
 }
 
 /// Decode only fields that are confirmed from observed transactions.
@@ -40,6 +92,109 @@ pub fn decode_observed_open_order(data: &[u8]) -> Result<ObservedOpenOrder> {
         input_amount: read_u64(data, 24)?,
         quoted_output_amount: read_u64(data, 32)?,
     })
+}
+
+pub fn validate_open_order_keys(
+    keys: &OpenOrderKeys,
+    market: &ApprovedMarket,
+    vault_usdc: Pubkey,
+    vault_authority: Pubkey,
+    usdc_mint: Pubkey,
+) -> Result<()> {
+    require!(market.enabled, PactumError::MarketDisabled);
+    require_keys_eq!(
+        keys.event_authority,
+        EVENT_AUTHORITY,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.market_ledger,
+        market.market_ledger,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.usdc_mint,
+        usdc_mint,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.source_usdc,
+        vault_usdc,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.token_authority,
+        vault_authority,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.token_program,
+        SPL_TOKEN_PROGRAM,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.system_program,
+        SYSTEM_PROGRAM,
+        PactumError::InvalidDflowAccounts
+    );
+    Ok(())
+}
+
+pub fn validate_redeem_keys(
+    keys: &RedeemKeys,
+    market: &ApprovedMarket,
+    side: OutcomeSide,
+    vault_usdc: Pubkey,
+    vault_authority: Pubkey,
+    usdc_mint: Pubkey,
+) -> Result<()> {
+    require!(market.enabled, PactumError::MarketDisabled);
+    require_keys_eq!(
+        keys.event_authority,
+        EVENT_AUTHORITY,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.market_ledger,
+        market.market_ledger,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.settlement_vault,
+        market.settlement_vault,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.settlement_destination,
+        vault_usdc,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.usdc_mint,
+        usdc_mint,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.outcome_mint,
+        side.mint(market),
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.token_authority,
+        vault_authority,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.token_2022_program,
+        TOKEN_2022_PROGRAM,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.token_program,
+        SPL_TOKEN_PROGRAM,
+        PactumError::InvalidDflowAccounts
+    );
+    Ok(())
 }
 
 pub fn validate_redeem_data(data: &[u8]) -> Result<()> {
@@ -79,6 +234,17 @@ mod tests {
         0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
+    fn market() -> ApprovedMarket {
+        ApprovedMarket {
+            market_ledger: pubkey!("GGViDLxL6RRQ4zTydGoiL6NnLugxyDGraydUBAQfo9iX"),
+            settlement_vault: pubkey!("BciG3VNEgDihNBcsZYxcJugBw59wQ7xRZAjen6ENaW6h"),
+            yes_mint: pubkey!("4qeSi2JVCbE9VQt1uzTJTpJSKdMFRsqWuvf3UL9fGa2P"),
+            no_mint: pubkey!("CA7FMbzNTfeR7jkLzF113bBJupKwq98cixaQtc3b3frb"),
+            enabled: true,
+            bump: 255,
+        }
+    }
+
     #[test]
     fn decodes_confirmed_open_order_fixture() {
         let decoded = decode_observed_open_order(&OPEN_FIXTURE).unwrap();
@@ -96,5 +262,67 @@ mod tests {
         let mut fixture = OPEN_FIXTURE;
         fixture[0] = 0x42;
         assert!(decode_observed_open_order(&fixture).is_err());
+    }
+
+    #[test]
+    fn redeem_validation_rejects_redirected_usdc_destination() {
+        let market = market();
+        let vault_usdc = Pubkey::new_unique();
+        let vault_authority = Pubkey::new_unique();
+        let usdc_mint = crate::dflow::USDC_MINT;
+
+        let keys = RedeemKeys {
+            event_authority: EVENT_AUTHORITY,
+            market_ledger: market.market_ledger,
+            settlement_vault: market.settlement_vault,
+            outcome_account: Pubkey::new_unique(),
+            settlement_destination: Pubkey::new_unique(),
+            usdc_mint,
+            outcome_mint: market.yes_mint,
+            token_authority: vault_authority,
+            token_2022_program: TOKEN_2022_PROGRAM,
+            token_program: SPL_TOKEN_PROGRAM,
+        };
+
+        assert!(validate_redeem_keys(
+            &keys,
+            &market,
+            OutcomeSide::Yes,
+            vault_usdc,
+            vault_authority,
+            usdc_mint,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn redeem_validation_rejects_wrong_outcome_mint() {
+        let market = market();
+        let vault_usdc = Pubkey::new_unique();
+        let vault_authority = Pubkey::new_unique();
+        let usdc_mint = crate::dflow::USDC_MINT;
+
+        let keys = RedeemKeys {
+            event_authority: EVENT_AUTHORITY,
+            market_ledger: market.market_ledger,
+            settlement_vault: market.settlement_vault,
+            outcome_account: Pubkey::new_unique(),
+            settlement_destination: vault_usdc,
+            usdc_mint,
+            outcome_mint: market.no_mint,
+            token_authority: vault_authority,
+            token_2022_program: TOKEN_2022_PROGRAM,
+            token_program: SPL_TOKEN_PROGRAM,
+        };
+
+        assert!(validate_redeem_keys(
+            &keys,
+            &market,
+            OutcomeSide::Yes,
+            vault_usdc,
+            vault_authority,
+            usdc_mint,
+        )
+        .is_err());
     }
 }
