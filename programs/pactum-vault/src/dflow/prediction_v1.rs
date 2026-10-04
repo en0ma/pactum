@@ -12,8 +12,11 @@ pub const FILL_USER_ORDER_ACTION: u64 = 0x41;
 pub const REDEEM_MARKET_OUTCOME_ACTION: u64 = 0x58;
 
 pub const OPEN_USER_ORDER_DATA_LEN: usize = 80;
+pub const OBSERVED_USER_ORDER_ACCOUNT_LEN: usize = 344;
 pub const FILL_USER_ORDER_DATA_LEN: usize = 32;
 pub const REDEEM_MARKET_OUTCOME_DATA_LEN: usize = 8;
+pub const MAX_TRADE_SLIPPAGE_BPS: u16 = 500;
+pub const BPS_DENOMINATOR: u64 = 10_000;
 
 pub const EVENT_AUTHORITY: Pubkey = pubkey!("ATZQPakBrumxMrSyuEmrt6NcxBbTR1Ucs99dnPFpBUuM");
 pub const TOKEN_2022_PROGRAM: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -148,6 +151,36 @@ pub fn validate_open_order_keys(
         PactumError::InvalidDflowAccounts
     );
     Ok(())
+}
+
+pub fn validate_open_order_data(
+    data: &[u8],
+    expected_input_amount: u64,
+    quoted_outcome_atoms: u64,
+    slippage_bps: u16,
+) -> Result<ObservedOpenOrder> {
+    require!(
+        slippage_bps <= MAX_TRADE_SLIPPAGE_BPS,
+        PactumError::InvalidSlippage
+    );
+
+    let decoded = decode_observed_open_order(data)?;
+    require!(
+        decoded.input_amount == expected_input_amount,
+        PactumError::InvalidDflowFixture
+    );
+
+    let min_outcome_atoms = quoted_outcome_atoms
+        .checked_mul(BPS_DENOMINATOR - u64::from(slippage_bps))
+        .ok_or(PactumError::MathOverflow)?
+        / BPS_DENOMINATOR;
+
+    require!(
+        decoded.quoted_output_amount >= min_outcome_atoms,
+        PactumError::InvalidDflowFixture
+    );
+
+    Ok(decoded)
 }
 
 pub fn validate_redeem_keys(
@@ -327,6 +360,23 @@ mod tests {
         };
 
         assert!(validate_open_order_keys(&keys, &market, vault_usdc, vault_authority,).is_err());
+    }
+
+    #[test]
+    fn open_order_data_enforces_amount_quote_and_slippage() {
+        let decoded = validate_open_order_data(&OPEN_FIXTURE, 948_096, 11_000_000, 50).unwrap();
+        assert_eq!(decoded.input_amount, 948_096);
+        assert_eq!(decoded.quoted_output_amount, 11_000_000);
+
+        assert!(validate_open_order_data(&OPEN_FIXTURE, 948_095, 11_000_000, 50).is_err());
+        assert!(validate_open_order_data(&OPEN_FIXTURE, 948_096, 12_000_000, 50).is_err());
+        assert!(validate_open_order_data(
+            &OPEN_FIXTURE,
+            948_096,
+            11_000_000,
+            MAX_TRADE_SLIPPAGE_BPS + 1,
+        )
+        .is_err());
     }
 
     #[test]

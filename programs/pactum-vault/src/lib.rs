@@ -14,7 +14,10 @@ pub mod math;
 pub mod state;
 
 use error::PactumError;
-use state::{ApprovedMarket, KeeperAuthorization, MarketExposure, UserPosition, VaultConfig};
+use state::{
+    ApprovedMarket, KeeperAuthorization, MarketExposure, PendingDflowOrder, UserPosition,
+    VaultConfig,
+};
 
 declare_id!("AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw");
 
@@ -273,6 +276,156 @@ pub mod pactum_vault {
         Ok(())
     }
 
+    /// Open a DFlow prediction-market order directly from Pactum custody.
+    ///
+    /// The keeper selects the already-approved market and trade parameters, but
+    /// never receives custody. VaultAuthorityPDA is the DFlow signer via
+    /// invoke_signed and DFlow debits the PDA-owned USDC vault directly.
+    pub fn execute_trade(
+        ctx: Context<ExecuteTrade>,
+        order_data: [u8; dflow::prediction_v1::OPEN_USER_ORDER_DATA_LEN],
+        input_amount: u64,
+        quoted_outcome_atoms: u64,
+        slippage_bps: u16,
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
+
+        math::validate_trade_amount(
+            input_amount,
+            ctx.accounts.config.open_exposure_usdc,
+            ctx.accounts.config.max_trade_usdc,
+            ctx.accounts.config.max_total_exposure_usdc,
+        )?;
+
+        let decoded = dflow::prediction_v1::validate_open_order_data(
+            &order_data,
+            input_amount,
+            quoted_outcome_atoms,
+            slippage_bps,
+        )?;
+
+        require!(
+            ctx.accounts.approved_market.enabled,
+            PactumError::MarketDisabled
+        );
+        let _side = dflow::prediction_v1::OutcomeSide::from_mint(
+            &ctx.accounts.approved_market,
+            ctx.accounts.outcome_mint.key(),
+        )?;
+
+        let remaining_liquidity = ctx
+            .accounts
+            .vault_usdc
+            .amount
+            .checked_sub(input_amount)
+            .ok_or(PactumError::MathOverflow)?;
+        require!(
+            remaining_liquidity >= ctx.accounts.config.min_liquidity_buffer_usdc,
+            PactumError::LiquidityBufferViolation
+        );
+
+        let keys = dflow::prediction_v1::OpenOrderKeys {
+            event_authority: ctx.accounts.event_authority.key(),
+            market_ledger: ctx.accounts.market_ledger.key(),
+            market_usdc_account: ctx.accounts.market_usdc_account.key(),
+            order_account: ctx.accounts.order_account.key(),
+            usdc_mint: ctx.accounts.usdc_mint.key(),
+            source_usdc: ctx.accounts.vault_usdc.key(),
+            token_authority: ctx.accounts.vault_authority.key(),
+            token_program: ctx.accounts.token_program.key(),
+            system_program: ctx.accounts.system_program.key(),
+        };
+        dflow::prediction_v1::validate_open_order_keys(
+            &keys,
+            &ctx.accounts.approved_market,
+            ctx.accounts.vault_usdc.key(),
+            ctx.accounts.vault_authority.key(),
+        )?;
+
+        let vault_before = ctx.accounts.vault_usdc.amount;
+        let ix = Instruction {
+            program_id: dflow::DFLOW_PREDICTION_MARKETS,
+            accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
+                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new(ctx.accounts.market_usdc_account.key(), false),
+                AccountMeta::new(ctx.accounts.order_account.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
+                AccountMeta::new(ctx.accounts.vault_usdc.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
+            ],
+            data: order_data.to_vec(),
+        };
+
+        let authority_bump = [ctx.accounts.config.vault_authority_bump];
+        let authority_seeds: &[&[u8]] = &[b"vault_authority", &authority_bump];
+
+        solana_cpi::invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.event_authority.to_account_info(),
+                ctx.accounts.market_ledger.to_account_info(),
+                ctx.accounts.market_usdc_account.to_account_info(),
+                ctx.accounts.order_account.to_account_info(),
+                ctx.accounts.usdc_mint.to_account_info(),
+                ctx.accounts.vault_usdc.to_account_info(),
+                ctx.accounts.vault_authority.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.dflow_program.to_account_info(),
+            ],
+            &[authority_seeds],
+        )?;
+
+        ctx.accounts.vault_usdc.reload()?;
+        let spent = vault_before
+            .checked_sub(ctx.accounts.vault_usdc.amount)
+            .ok_or(PactumError::MathOverflow)?;
+        require!(spent == input_amount, PactumError::InvalidDflowSpend);
+
+        require_keys_eq!(
+            *ctx.accounts.order_account.owner,
+            dflow::DFLOW_PREDICTION_MARKETS,
+            PactumError::InvalidDflowAccounts
+        );
+        require!(
+            ctx.accounts.order_account.data_len()
+                == dflow::prediction_v1::OBSERVED_USER_ORDER_ACCOUNT_LEN,
+            PactumError::InvalidDflowAccounts
+        );
+
+        let pending = &mut ctx.accounts.pending_order;
+        pending.order_account = ctx.accounts.order_account.key();
+        pending.market_ledger = ctx.accounts.market_ledger.key();
+        pending.outcome_mint = ctx.accounts.outcome_mint.key();
+        pending.cost_basis_usdc = input_amount;
+        pending.quoted_outcome_atoms = decoded.quoted_output_amount;
+        pending.bump = ctx.bumps.pending_order;
+
+        ctx.accounts.config.open_exposure_usdc = ctx
+            .accounts
+            .config
+            .open_exposure_usdc
+            .checked_add(input_amount)
+            .ok_or(PactumError::MathOverflow)?;
+
+        emit!(DflowOrderOpened {
+            keeper: ctx.accounts.keeper.key(),
+            order_account: ctx.accounts.order_account.key(),
+            market_ledger: ctx.accounts.market_ledger.key(),
+            outcome_mint: ctx.accounts.outcome_mint.key(),
+            input_usdc: input_amount,
+            quoted_outcome_atoms: decoded.quoted_output_amount,
+            slippage_bps,
+        });
+
+        Ok(())
+    }
+
     /// Redeem a complete, tracked winning DFlow outcome position.
     ///
     /// This is deliberately available while paused and after a market is
@@ -499,6 +652,56 @@ pub mod pactum_vault {
         };
 
         invoke(&ix, &[ctx.accounts.dflow_program.to_account_info()]).map_err(Into::into)
+    }
+
+    /// CI-only fork probe for the observed OpenUserOrder account shape.
+    ///
+    /// Uses the same three repeated PDA signer roles as production execute_trade
+    /// and the confirmed 80-byte action-0x40 payload shape. The fork test asserts
+    /// that the CPI reaches the real DFlow PM program without signer escalation.
+    #[cfg(feature = "test-hooks")]
+    pub fn probe_dflow_open_order_pda(
+        ctx: Context<ProbeDflowOpenOrderPda>,
+        order_data: [u8; dflow::prediction_v1::OPEN_USER_ORDER_DATA_LEN],
+    ) -> Result<()> {
+        let ix = Instruction {
+            program_id: dflow::DFLOW_PREDICTION_MARKETS,
+            accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
+                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new(ctx.accounts.market_usdc_account.key(), false),
+                AccountMeta::new(ctx.accounts.order_account.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
+                AccountMeta::new(ctx.accounts.source_usdc.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
+            ],
+            data: order_data.to_vec(),
+        };
+
+        let bump = [ctx.bumps.probe_authority];
+        let seeds: &[&[u8]] = &[b"dflow_open_order_probe", &bump];
+
+        solana_cpi::invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.event_authority.to_account_info(),
+                ctx.accounts.market_ledger.to_account_info(),
+                ctx.accounts.market_usdc_account.to_account_info(),
+                ctx.accounts.order_account.to_account_info(),
+                ctx.accounts.usdc_mint.to_account_info(),
+                ctx.accounts.source_usdc.to_account_info(),
+                ctx.accounts.probe_authority.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.dflow_program.to_account_info(),
+            ],
+            &[seeds],
+        )
+        .map_err(Into::into)
     }
 
     /// CI-only proof that Solana accepts a Pactum PDA as an inner DFlow signer.
@@ -775,6 +978,96 @@ pub struct Withdraw<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ExecuteTrade<'info> {
+    #[account(mut)]
+    pub keeper: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.config_bump
+    )]
+    pub config: Box<Account<'info, VaultConfig>>,
+
+    #[account(
+        seeds = [b"keeper", config.key().as_ref(), keeper.key().as_ref()],
+        bump = keeper_authorization.bump,
+        constraint = keeper_authorization.keeper == keeper.key()
+    )]
+    pub keeper_authorization: Box<Account<'info, KeeperAuthorization>>,
+
+    #[account(
+        seeds = [b"market", approved_market.market_ledger.as_ref()],
+        bump = approved_market.bump
+    )]
+    pub approved_market: Box<Account<'info, ApprovedMarket>>,
+
+    /// CHECK: DFlow-owned approved market ledger.
+    #[account(
+        mut,
+        address = approved_market.market_ledger,
+        constraint = *market_ledger.owner == dflow::DFLOW_PREDICTION_MARKETS
+    )]
+    pub market_ledger: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        address = approved_market.settlement_vault,
+        token::mint = usdc_mint,
+        token::authority = market_ledger
+    )]
+    pub market_usdc_account: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: DFlow creates and owns this user-order account during OpenUserOrder.
+    #[account(mut)]
+    pub order_account: UncheckedAccount<'info>,
+
+    /// CHECK: Pactum PDA that signs DFlow user/authority roles.
+    #[account(
+        seeds = [b"vault_authority"],
+        bump = config.vault_authority_bump
+    )]
+    pub vault_authority: UncheckedAccount<'info>,
+
+    #[account(address = dflow::USDC_MINT)]
+    pub usdc_mint: Box<Account<'info, Mint>>,
+
+    #[account(
+        mut,
+        address = config.usdc_vault,
+        token::mint = usdc_mint,
+        token::authority = vault_authority
+    )]
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        constraint = *outcome_mint.to_account_info().owner
+            == dflow::prediction_v1::TOKEN_2022_PROGRAM
+    )]
+    pub outcome_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
+
+    #[account(
+        init,
+        payer = keeper,
+        seeds = [b"pending_order", config.key().as_ref(), order_account.key().as_ref()],
+        bump,
+        space = 8 + PendingDflowOrder::LEN
+    )]
+    pub pending_order: Box<Account<'info, PendingDflowOrder>>,
+
+    /// CHECK: fixed DFlow event authority.
+    #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
+    pub event_authority: UncheckedAccount<'info>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: fixed DFlow Prediction Markets program.
+    #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
+    pub dflow_program: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
 pub struct RedeemMarketOutcome<'info> {
     pub keeper: Signer<'info>,
 
@@ -972,6 +1265,44 @@ pub struct ProbeDflowPredictionCpi<'info> {
 
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
+pub struct ProbeDflowOpenOrderPda<'info> {
+    /// CHECK: deterministic CI-only PDA standing in for VaultAuthority signer roles.
+    #[account(seeds = [b"dflow_open_order_probe"], bump)]
+    pub probe_authority: UncheckedAccount<'info>,
+
+    /// CHECK: fixed DFlow event authority.
+    #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
+    pub event_authority: UncheckedAccount<'info>,
+
+    /// CHECK: forked DFlow market ledger supplied by the test fixture.
+    #[account(mut)]
+    pub market_ledger: UncheckedAccount<'info>,
+
+    /// CHECK: forked DFlow market USDC account supplied by the test fixture.
+    #[account(mut)]
+    pub market_usdc_account: UncheckedAccount<'info>,
+
+    /// CHECK: candidate DFlow order account. DFlow may reject it after CPI entry.
+    #[account(mut)]
+    pub order_account: UncheckedAccount<'info>,
+
+    /// CHECK: canonical mainnet USDC mint.
+    #[account(address = dflow::USDC_MINT)]
+    pub usdc_mint: UncheckedAccount<'info>,
+
+    /// CHECK: PDA-owned source USDC fixture seeded by Surfpool.
+    #[account(mut)]
+    pub source_usdc: UncheckedAccount<'info>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: fixed DFlow prediction-market program.
+    #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
+    pub dflow_program: UncheckedAccount<'info>,
+}
+#[cfg(feature = "test-hooks")]
+#[derive(Accounts)]
 pub struct ProbeDflowPdaSignedCpi<'info> {
     /// CHECK: deterministic CI-only PDA; it need not hold data or lamports.
     #[account(seeds = [b"dflow_cpi_probe"], bump)]
@@ -1013,6 +1344,17 @@ pub struct MarketChanged {
 pub struct KeeperChanged {
     pub keeper: Pubkey,
     pub authorized: bool,
+}
+
+#[event]
+pub struct DflowOrderOpened {
+    pub keeper: Pubkey,
+    pub order_account: Pubkey,
+    pub market_ledger: Pubkey,
+    pub outcome_mint: Pubkey,
+    pub input_usdc: u64,
+    pub quoted_outcome_atoms: u64,
+    pub slippage_bps: u16,
 }
 
 #[event]

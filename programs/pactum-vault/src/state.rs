@@ -76,3 +76,17 @@ pub struct MarketExposure {
 impl MarketExposure {
     pub const LEN: usize = 32 + 32 + 8 + 8 + 1;
 }
+
+#[account]
+pub struct PendingDflowOrder {
+    pub order_account: Pubkey,
+    pub market_ledger: Pubkey,
+    pub outcome_mint: Pubkey,
+    pub cost_basis_usdc: u64,
+    pub quoted_outcome_atoms: u64,
+    pub bump: u8,
+}
+
+impl PendingDflowOrder {
+    pub const LEN: usize = 32 + 32 + 32 + 8 + 8 + 1;
+}
