@@ -112,6 +112,11 @@ pub fn validate_open_order_keys(
         PactumError::InvalidDflowAccounts
     );
     require_keys_eq!(
+        keys.market_usdc_account,
+        market.settlement_vault,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
         keys.usdc_mint,
         super::USDC_MINT,
         PactumError::InvalidDflowAccounts
@@ -260,6 +265,33 @@ mod tests {
         let mut fixture = OPEN_FIXTURE;
         fixture[0] = 0x42;
         assert!(decode_observed_open_order(&fixture).is_err());
+    }
+
+    #[test]
+    fn open_order_validation_rejects_unapproved_market_usdc_account() {
+        let market = market();
+        let vault_usdc = Pubkey::new_unique();
+        let vault_authority = Pubkey::new_unique();
+
+        let keys = OpenOrderKeys {
+            event_authority: EVENT_AUTHORITY,
+            market_ledger: market.market_ledger,
+            market_usdc_account: Pubkey::new_unique(),
+            order_account: Pubkey::new_unique(),
+            usdc_mint: crate::dflow::USDC_MINT,
+            source_usdc: vault_usdc,
+            token_authority: vault_authority,
+            token_program: SPL_TOKEN_PROGRAM,
+            system_program: SYSTEM_PROGRAM,
+        };
+
+        assert!(validate_open_order_keys(
+            &keys,
+            &market,
+            vault_usdc,
+            vault_authority,
+        )
+        .is_err());
     }
 
     #[test]
