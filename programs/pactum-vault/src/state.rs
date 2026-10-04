@@ -84,10 +84,10 @@ pub struct PendingDflowOrder {
     pub outcome_mint: Pubkey,
     pub cost_basis_usdc: u64,
     pub quoted_outcome_atoms: u64,
-    /// Canonical PDA-owned outcome ATA balance at the last reconciliation point.
-    pub outcome_balance_before: u64,
-    /// Total outcome atoms observed across all reconciled async fills.
-    pub filled_outcome_atoms: u64,
+    /// Canonical PDA-owned outcome ATA balance immediately before OpenUserOrder.
+    pub outcome_balance_start: u64,
+    /// Last observed canonical outcome ATA balance, used only for incremental telemetry.
+    pub outcome_balance_observed: u64,
     /// Canonical VaultAuthority USDC ATA balance immediately before OpenUserOrder.
     pub refund_usdc_balance_before: u64,
     pub slippage_bps: u16,
