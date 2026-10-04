@@ -72,6 +72,7 @@ pub fn validate_trade_amount(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn first_deposit_mints_one_share_atom_per_usdc_atom() {
@@ -115,5 +116,40 @@ mod tests {
     #[test]
     fn trade_validation_rejects_aggregate_limit() {
         assert!(validate_trade_amount(250_000, 900_000, 300_000, 1_000_000).is_err());
+    }
+
+    proptest! {
+        #[test]
+        fn deposit_then_full_withdraw_preserves_amount(amount in 1u64..1_000_000_000u64) {
+            let shares = shares_for_deposit(amount, 0, 0).unwrap();
+            let withdrawn = usdc_for_withdrawal(shares, shares, amount).unwrap();
+            prop_assert_eq!(withdrawn, amount);
+        }
+
+        #[test]
+        fn proportional_share_mint_never_exceeds_exact_fraction(
+            amount in 1u64..1_000_000_000u64,
+            total_shares in 1u64..1_000_000_000u64,
+            liquid_usdc in 1u64..1_000_000_000u64,
+        ) {
+            let minted = shares_for_deposit(amount, total_shares, liquid_usdc).unwrap_or(0);
+            let lhs = (minted as u128) * (liquid_usdc as u128);
+            let rhs = (amount as u128) * (total_shares as u128);
+            prop_assert!(lhs <= rhs);
+        }
+
+        #[test]
+        fn accepted_trade_never_exceeds_total_exposure(
+            amount in 1u64..1_000_000u64,
+            open in 0u64..1_000_000u64,
+            per_trade in 1u64..1_000_000u64,
+            total in 1u64..2_000_000u64,
+        ) {
+            if let Ok(new_exposure) = validate_trade_amount(amount, open, per_trade, total) {
+                prop_assert!(amount <= per_trade);
+                prop_assert!(new_exposure <= total);
+                prop_assert_eq!(new_exposure, open + amount);
+            }
+        }
     }
 }
