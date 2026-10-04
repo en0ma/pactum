@@ -48,6 +48,27 @@ pub fn validate_risk_limits(max_trade_usdc: u64, max_total_exposure_usdc: u64) -
     Ok(())
 }
 
+pub fn validate_trade_amount(
+    amount: u64,
+    open_exposure_usdc: u64,
+    max_trade_usdc: u64,
+    max_total_exposure_usdc: u64,
+) -> Result<u64> {
+    require!(amount > 0, PactumError::ZeroAmount);
+    require!(amount <= max_trade_usdc, PactumError::TradeTooLarge);
+
+    let new_exposure = open_exposure_usdc
+        .checked_add(amount)
+        .ok_or(PactumError::MathOverflow)?;
+
+    require!(
+        new_exposure <= max_total_exposure_usdc,
+        PactumError::ExposureLimitExceeded
+    );
+
+    Ok(new_exposure)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +97,23 @@ mod tests {
     #[test]
     fn rejects_trade_limit_above_total_exposure() {
         assert!(validate_risk_limits(2_000_000, 1_000_000).is_err());
+    }
+
+    #[test]
+    fn trade_validation_returns_new_exposure() {
+        assert_eq!(
+            validate_trade_amount(250_000, 500_000, 300_000, 1_000_000).unwrap(),
+            750_000
+        );
+    }
+
+    #[test]
+    fn trade_validation_rejects_per_trade_limit() {
+        assert!(validate_trade_amount(400_000, 0, 300_000, 1_000_000).is_err());
+    }
+
+    #[test]
+    fn trade_validation_rejects_aggregate_limit() {
+        assert!(validate_trade_amount(250_000, 900_000, 300_000, 1_000_000).is_err());
     }
 }
