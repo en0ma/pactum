@@ -547,6 +547,15 @@ async function main() {
     ],
     PROGRAM_ID,
   );
+  const [marketExposure] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("exposure"),
+      config.toBuffer(),
+      OPEN_PROBE_MARKET_LEDGER.toBuffer(),
+      FILL_RECONCILE_OUTCOME_MINT.toBuffer(),
+    ],
+    PROGRAM_ID,
+  );
 
   const initializeVaultIx = new TransactionInstruction({
     programId: PROGRAM_ID,
@@ -707,6 +716,165 @@ async function main() {
     throw new Error("reconciliation replay unexpectedly accepted a zero fill delta");
   }
 
+
+  const refundUsdcAta = associatedTokenAddress(
+    vaultAuthority,
+    USDC_MINT,
+    SPL_TOKEN_PROGRAM,
+  );
+  await surfpoolRpc("surfnet_setTokenAccount", [
+    vaultAuthority.toBase58(),
+    USDC_MINT.toBase58(),
+    { amount: 0, state: "initialized" },
+  ]);
+
+  await surfpoolRpc("surfnet_setAccount", [
+    syntheticOrderAccount.toBase58(),
+    {
+      lamports: 0,
+      owner: SystemProgram.programId.toBase58(),
+      executable: false,
+      data: "",
+    },
+  ]);
+
+  const finalizeFilledIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+      { pubkey: keeperAuthorization, isSigner: false, isWritable: false },
+      { pubkey: approvedMarket, isSigner: false, isWritable: false },
+      { pubkey: syntheticOrderAccount, isSigner: false, isWritable: false },
+      { pubkey: vaultAuthority, isSigner: false, isWritable: false },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: vaultUsdc, isSigner: false, isWritable: true },
+      { pubkey: refundUsdcAta, isSigner: false, isWritable: true },
+      { pubkey: FILL_RECONCILE_OUTCOME_MINT, isSigner: false, isWritable: false },
+      { pubkey: outcomeAta, isSigner: false, isWritable: false },
+      { pubkey: pendingOrder, isSigner: false, isWritable: true },
+      { pubkey: marketExposure, isSigner: false, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_2022_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("finalize_dflow_filled_order"),
+  });
+  await sendInstructions(connection, payer, finalizeFilledIx);
+
+  const [pendingAfterFinalize, exposureAfterFinalize] = await Promise.all([
+    connection.getAccountInfo(pendingOrder),
+    connection.getAccountInfo(marketExposure),
+  ]);
+  if (pendingAfterFinalize !== null) {
+    throw new Error("terminal filled order did not close PendingDflowOrder");
+  }
+  if (!exposureAfterFinalize) {
+    throw new Error("terminal filled order did not materialize MarketExposure");
+  }
+  const finalizedCostBasis = exposureAfterFinalize.data.readBigUInt64LE(72);
+  const finalizedOutcomeAtoms = exposureAfterFinalize.data.readBigUInt64LE(80);
+  if (finalizedCostBasis !== reconcileCostBasis) {
+    throw new Error(
+      `unexpected finalized cost basis: ${finalizedCostBasis} != ${reconcileCostBasis}`,
+    );
+  }
+  if (finalizedOutcomeAtoms !== reconcileQuotedOutcome) {
+    throw new Error(
+      `unexpected finalized outcome atoms: ${finalizedOutcomeAtoms} != ${reconcileQuotedOutcome}`,
+    );
+  }
+
+  const unwindOrderAccount = Keypair.generate().publicKey;
+  await surfpoolRpc("surfnet_setAccount", [
+    unwindOrderAccount.toBase58(),
+    {
+      lamports: 1_000_000,
+      owner: DFLOW_PM.toBase58(),
+      executable: false,
+      data: "00".repeat(344),
+    },
+  ]);
+
+  const seedUnwindIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+      { pubkey: approvedMarket, isSigner: false, isWritable: false },
+      { pubkey: unwindOrderAccount, isSigner: false, isWritable: false },
+      { pubkey: FILL_RECONCILE_OUTCOME_MINT, isSigner: false, isWritable: false },
+      { pubkey: pendingOrder, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("seed_pending_dflow_order"),
+      u64Le(reconcileCostBasis),
+      u64Le(reconcileQuotedOutcome),
+      u64Le(reconcileQuotedOutcome),
+      u16Le(reconcileSlippageBps),
+    ]),
+  });
+  await sendInstructions(connection, payer, seedUnwindIx);
+
+  await surfpoolRpc("surfnet_setTokenAccount", [
+    vaultAuthority.toBase58(),
+    USDC_MINT.toBase58(),
+    { amount: Number(reconcileCostBasis), state: "initialized" },
+  ]);
+  await surfpoolRpc("surfnet_setAccount", [
+    unwindOrderAccount.toBase58(),
+    {
+      lamports: 0,
+      owner: SystemProgram.programId.toBase58(),
+      executable: false,
+      data: "",
+    },
+  ]);
+
+  const unwindIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+      { pubkey: keeperAuthorization, isSigner: false, isWritable: false },
+      { pubkey: approvedMarket, isSigner: false, isWritable: false },
+      { pubkey: unwindOrderAccount, isSigner: false, isWritable: false },
+      { pubkey: vaultAuthority, isSigner: false, isWritable: false },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: vaultUsdc, isSigner: false, isWritable: true },
+      { pubkey: refundUsdcAta, isSigner: false, isWritable: true },
+      { pubkey: FILL_RECONCILE_OUTCOME_MINT, isSigner: false, isWritable: false },
+      { pubkey: outcomeAta, isSigner: false, isWritable: false },
+      { pubkey: pendingOrder, isSigner: false, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_2022_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("unwind_dflow_order"),
+  });
+  await sendInstructions(connection, payer, unwindIx);
+
+  const [pendingAfterUnwind, configAfterUnwind, vaultAfterUnwind] = await Promise.all([
+    connection.getAccountInfo(pendingOrder),
+    connection.getAccountInfo(config),
+    connection.getTokenAccountBalance(vaultUsdc),
+  ]);
+  if (pendingAfterUnwind !== null) {
+    throw new Error("zero-fill terminal unwind did not close PendingDflowOrder");
+  }
+  const openExposureAfterUnwind = configAfterUnwind.data.readBigUInt64LE(99);
+  if (openExposureAfterUnwind !== reconcileCostBasis) {
+    throw new Error(
+      `unexpected exposure after unwind: ${openExposureAfterUnwind} != ${reconcileCostBasis}`,
+    );
+  }
+  if (BigInt(vaultAfterUnwind.value.amount) < reconcileCostBasis) {
+    throw new Error("terminal refund was not swept back into vault_usdc");
+  }
+
   const dflowTerminalClosure = await probeDflowTerminalAccountClosure();
 
   console.log(JSON.stringify({
@@ -751,6 +919,11 @@ async function main() {
       reconciledAtaBaseline: reconciledBaseline.toString(),
       cumulativeFilledOutcomeAtoms: cumulativeFilledOutcomeAtoms.toString(),
       replayRejected: Boolean(secondReconcileSim.value.err),
+      terminalFilledFinalized: pendingAfterFinalize === null,
+      finalizedCostBasis: finalizedCostBasis.toString(),
+      finalizedOutcomeAtoms: finalizedOutcomeAtoms.toString(),
+      zeroFillUnwound: pendingAfterUnwind === null,
+      openExposureAfterUnwind: openExposureAfterUnwind.toString(),
       computeUnits: reconcileCu,
       cuBudget: FILL_RECONCILE_CU_BUDGET,
     },
