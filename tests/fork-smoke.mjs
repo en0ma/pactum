@@ -785,23 +785,78 @@ async function main() {
     ],
     data: anchorDiscriminator("unwind_dflow_order"),
   });
-  await sendInstructions(connection, payer, unwindIx);
-
-  const [pendingAfterUnwind, configAfterUnwind, vaultAfterUnwind] = await Promise.all([
-    connection.getAccountInfo(pendingOrder),
-    connection.getAccountInfo(config),
-    connection.getTokenAccountBalance(vaultUsdc),
-  ]);
-  if (pendingAfterUnwind !== null) {
-    throw new Error("zero-fill terminal unwind did not close PendingDflowOrder");
-  }
-  const openExposureAfterUnwind = configAfterUnwind.data.readBigUInt64LE(99);
-  if (openExposureAfterUnwind !== reconcileCostBasis) {
+  const donatedOutcomeUnwindSim = await connection.simulateTransaction(
+    new Transaction().add(unwindIx),
+    [payer],
+  );
+  if (!donatedOutcomeUnwindSim.value.err) {
     throw new Error(
-      `unexpected exposure after unwind: ${openExposureAfterUnwind} != ${reconcileCostBasis}`,
+      "full-refund unwind accepted a terminal order with new outcome assets",
     );
   }
-  if (BigInt(vaultAfterUnwind.value.amount) < reconcileCostBasis) {
+
+  const finalizeRefundedOutcomeIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+      { pubkey: keeperAuthorization, isSigner: false, isWritable: false },
+      { pubkey: approvedMarket, isSigner: false, isWritable: false },
+      { pubkey: unwindOrderAccount, isSigner: false, isWritable: false },
+      { pubkey: vaultAuthority, isSigner: false, isWritable: false },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: vaultUsdc, isSigner: false, isWritable: true },
+      { pubkey: refundUsdcAta, isSigner: false, isWritable: true },
+      { pubkey: FILL_RECONCILE_OUTCOME_MINT, isSigner: false, isWritable: false },
+      { pubkey: outcomeAta, isSigner: false, isWritable: false },
+      { pubkey: pendingOrder, isSigner: false, isWritable: true },
+      { pubkey: marketExposure, isSigner: false, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_2022_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("finalize_dflow_filled_order"),
+  });
+  await sendInstructions(connection, payer, finalizeRefundedOutcomeIx);
+
+  const [pendingAfterRefundedOutcome, configAfterRefundedOutcome, vaultAfterRefundedOutcome, exposureAfterRefundedOutcome] =
+    await Promise.all([
+      connection.getAccountInfo(pendingOrder),
+      connection.getAccountInfo(config),
+      connection.getTokenAccountBalance(vaultUsdc),
+      connection.getAccountInfo(marketExposure),
+    ]);
+  if (pendingAfterRefundedOutcome !== null) {
+    throw new Error("terminal refunded outcome order did not close PendingDflowOrder");
+  }
+  if (!exposureAfterRefundedOutcome) {
+    throw new Error("terminal refunded outcome order lost tracked outcome assets");
+  }
+
+  const costAfterRefundedOutcome =
+    exposureAfterRefundedOutcome.data.readBigUInt64LE(72);
+  const atomsAfterRefundedOutcome =
+    exposureAfterRefundedOutcome.data.readBigUInt64LE(80);
+  if (costAfterRefundedOutcome !== reconcileCostBasis) {
+    throw new Error(
+      `full refund changed tracked cost basis: ${costAfterRefundedOutcome} != ${reconcileCostBasis}`,
+    );
+  }
+  if (atomsAfterRefundedOutcome !== reconcileQuotedOutcome + 1n) {
+    throw new Error(
+      `refunded order outcome asset was not tracked: ${atomsAfterRefundedOutcome} != ${reconcileQuotedOutcome + 1n}`,
+    );
+  }
+
+  const openExposureAfterRefundedOutcome =
+    configAfterRefundedOutcome.data.readBigUInt64LE(99);
+  if (openExposureAfterRefundedOutcome !== reconcileCostBasis) {
+    throw new Error(
+      `unexpected exposure after refunded outcome finalization: ${openExposureAfterRefundedOutcome} != ${reconcileCostBasis}`,
+    );
+  }
+  if (BigInt(vaultAfterRefundedOutcome.value.amount) < reconcileCostBasis) {
     throw new Error("terminal refund was not swept back into vault_usdc");
   }
 
@@ -848,8 +903,11 @@ async function main() {
       terminalFilledFinalized: pendingAfterFinalize === null,
       finalizedCostBasis: finalizedCostBasis.toString(),
       finalizedOutcomeAtoms: finalizedOutcomeAtoms.toString(),
-      donationTolerantFullRefundUnwind: pendingAfterUnwind === null,
-      openExposureAfterUnwind: openExposureAfterUnwind.toString(),
+      donatedOutcomeUnwindRejected: Boolean(donatedOutcomeUnwindSim.value.err),
+      refundedOutcomeTracked: pendingAfterRefundedOutcome === null,
+      costAfterRefundedOutcome: costAfterRefundedOutcome.toString(),
+      atomsAfterRefundedOutcome: atomsAfterRefundedOutcome.toString(),
+      openExposureAfterRefundedOutcome: openExposureAfterRefundedOutcome.toString(),
     },
   }, null, 2));
 }
