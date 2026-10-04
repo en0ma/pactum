@@ -30,4 +30,6 @@ pub enum PactumError {
     ExposureLimitExceeded,
     #[msg("Unexpected DFlow instruction fixture")]
     InvalidDflowFixture,
+    #[msg("DFlow accounts do not match Pactum's approved market/custody constraints")]
+    InvalidDflowAccounts,
 }
