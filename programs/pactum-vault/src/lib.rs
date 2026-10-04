@@ -181,7 +181,7 @@ pub mod pactum_vault {
         };
 
         token::transfer_checked(
-            CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts),
+            CpiContext::new(ctx.accounts.token_program.key(), cpi_accounts),
             amount,
             ctx.accounts.usdc_mint.decimals,
         )?;
@@ -254,7 +254,7 @@ pub mod pactum_vault {
 
         token::transfer_checked(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 cpi_accounts,
                 signer_seeds,
             ),
