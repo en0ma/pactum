@@ -589,17 +589,6 @@ pub mod pactum_vault {
     pub fn unwind_dflow_order(ctx: Context<UnwindDflowOrder>) -> Result<()> {
         require_dflow_order_closed(&ctx.accounts.order_account)?;
 
-        let total_filled_outcome_atoms = ctx
-            .accounts
-            .outcome_ata
-            .amount
-            .checked_sub(ctx.accounts.pending_order.outcome_balance_start)
-            .ok_or(PactumError::MathOverflow)?;
-        require!(
-            total_filled_outcome_atoms == 0,
-            PactumError::InvalidDflowRefund
-        );
-
         let refund_usdc = ctx
             .accounts
             .refund_usdc_ata
