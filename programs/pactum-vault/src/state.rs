@@ -47,3 +47,17 @@ pub struct KeeperAuthorization {
 impl KeeperAuthorization {
     pub const LEN: usize = 32 + 1;
 }
+
+#[account]
+pub struct ApprovedMarket {
+    pub market_ledger: Pubkey,
+    pub settlement_vault: Pubkey,
+    pub yes_mint: Pubkey,
+    pub no_mint: Pubkey,
+    pub enabled: bool,
+    pub bump: u8,
+}
+
+impl ApprovedMarket {
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 1 + 1;
+}
