@@ -753,12 +753,18 @@ pub struct RedeemMarketOutcome<'info> {
 
     #[account(
         mut,
+        constraint = *outcome_account.to_account_info().owner
+            == dflow::prediction_v1::TOKEN_2022_PROGRAM,
         constraint = outcome_account.mint == outcome_mint.key(),
         constraint = outcome_account.owner == vault_authority.key()
     )]
     pub outcome_account: InterfaceAccount<'info, InterfaceTokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = *outcome_mint.to_account_info().owner
+            == dflow::prediction_v1::TOKEN_2022_PROGRAM
+    )]
     pub outcome_mint: InterfaceAccount<'info, InterfaceMint>,
 
     #[account(
