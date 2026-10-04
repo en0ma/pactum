@@ -998,7 +998,7 @@ fn require_dflow_order_closed(order_account: &UncheckedAccount<'_>) -> Result<()
     require!(
         order_account.lamports() == 0
             && order_account.data_is_empty()
-            && *order_account.owner == System::id(),
+            && *order_account.owner == anchor_lang::system_program::ID,
         PactumError::DflowOrderNotTerminal
     );
     Ok(())
