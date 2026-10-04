@@ -409,8 +409,8 @@ pub mod pactum_vault {
         pending.outcome_mint = ctx.accounts.outcome_mint.key();
         pending.cost_basis_usdc = input_amount;
         pending.quoted_outcome_atoms = decoded.quoted_output_amount;
-        pending.outcome_balance_before = outcome_balance_before;
-        pending.filled_outcome_atoms = 0;
+        pending.outcome_balance_start = outcome_balance_before;
+        pending.outcome_balance_observed = outcome_balance_before;
         pending.refund_usdc_balance_before = refund_usdc_balance_before;
         pending.slippage_bps = slippage_bps;
         pending.bump = ctx.bumps.pending_order;
@@ -441,12 +441,12 @@ pub mod pactum_vault {
     /// instruction does not trust keeper-provided fill amounts or API events.
     pub fn reconcile_dflow_fill(ctx: Context<ReconcileDflowFill>) -> Result<()> {
         let current_outcome_balance = ctx.accounts.outcome_ata.amount;
-        let newly_filled_outcome_atoms = current_outcome_balance
-            .checked_sub(ctx.accounts.pending_order.outcome_balance_before)
+        let newly_observed_outcome_atoms = current_outcome_balance
+            .checked_sub(ctx.accounts.pending_order.outcome_balance_observed)
             .ok_or(PactumError::MathOverflow)?;
 
         require!(
-            newly_filled_outcome_atoms > 0,
+            newly_observed_outcome_atoms > 0,
             PactumError::DflowFillNotObserved
         );
 
@@ -462,19 +462,18 @@ pub mod pactum_vault {
         );
 
         let pending = &mut ctx.accounts.pending_order;
-        pending.filled_outcome_atoms = pending
-            .filled_outcome_atoms
-            .checked_add(newly_filled_outcome_atoms)
+        pending.outcome_balance_observed = current_outcome_balance;
+        let cumulative_observed_outcome_atoms = current_outcome_balance
+            .checked_sub(pending.outcome_balance_start)
             .ok_or(PactumError::MathOverflow)?;
-        pending.outcome_balance_before = current_outcome_balance;
 
         emit!(DflowOrderFillObserved {
             keeper: ctx.accounts.keeper.key(),
             order_account: pending.order_account,
             market_ledger: pending.market_ledger,
             outcome_mint: pending.outcome_mint,
-            newly_filled_outcome_atoms,
-            cumulative_filled_outcome_atoms: pending.filled_outcome_atoms,
+            newly_filled_outcome_atoms: newly_observed_outcome_atoms,
+            cumulative_filled_outcome_atoms: cumulative_observed_outcome_atoms,
         });
 
         Ok(())
@@ -490,17 +489,11 @@ pub mod pactum_vault {
     ) -> Result<()> {
         require_dflow_order_closed(&ctx.accounts.order_account)?;
 
-        let newly_filled_outcome_atoms = ctx
+        let total_filled_outcome_atoms = ctx
             .accounts
             .outcome_ata
             .amount
-            .checked_sub(ctx.accounts.pending_order.outcome_balance_before)
-            .ok_or(PactumError::MathOverflow)?;
-        let total_filled_outcome_atoms = ctx
-            .accounts
-            .pending_order
-            .filled_outcome_atoms
-            .checked_add(newly_filled_outcome_atoms)
+            .checked_sub(ctx.accounts.pending_order.outcome_balance_start)
             .ok_or(PactumError::MathOverflow)?;
         require!(
             total_filled_outcome_atoms > 0,
@@ -513,15 +506,13 @@ pub mod pactum_vault {
             .amount
             .checked_sub(ctx.accounts.pending_order.refund_usdc_balance_before)
             .ok_or(PactumError::MathOverflow)?;
-        require!(
-            refund_usdc <= ctx.accounts.pending_order.cost_basis_usdc,
-            PactumError::InvalidDflowRefund
-        );
+        let recognized_refund_usdc =
+            refund_usdc.min(ctx.accounts.pending_order.cost_basis_usdc);
         let consumed_usdc = ctx
             .accounts
             .pending_order
             .cost_basis_usdc
-            .checked_sub(refund_usdc)
+            .checked_sub(recognized_refund_usdc)
             .ok_or(PactumError::MathOverflow)?;
         require!(consumed_usdc > 0, PactumError::InvalidDflowRefund);
 
@@ -551,7 +542,7 @@ pub mod pactum_vault {
             .accounts
             .config
             .open_exposure_usdc
-            .checked_sub(refund_usdc)
+            .checked_sub(recognized_refund_usdc)
             .ok_or(PactumError::MathOverflow)?;
 
         let exposure = &mut ctx.accounts.market_exposure;
@@ -587,7 +578,7 @@ pub mod pactum_vault {
             market_ledger: exposure.market_ledger,
             outcome_mint: exposure.outcome_mint,
             consumed_usdc,
-            refunded_usdc: refund_usdc,
+            refunded_usdc: recognized_refund_usdc,
             outcome_atoms: total_filled_outcome_atoms,
         });
 
@@ -598,17 +589,11 @@ pub mod pactum_vault {
     pub fn unwind_dflow_order(ctx: Context<UnwindDflowOrder>) -> Result<()> {
         require_dflow_order_closed(&ctx.accounts.order_account)?;
 
-        let newly_filled_outcome_atoms = ctx
+        let total_filled_outcome_atoms = ctx
             .accounts
             .outcome_ata
             .amount
-            .checked_sub(ctx.accounts.pending_order.outcome_balance_before)
-            .ok_or(PactumError::MathOverflow)?;
-        let total_filled_outcome_atoms = ctx
-            .accounts
-            .pending_order
-            .filled_outcome_atoms
-            .checked_add(newly_filled_outcome_atoms)
+            .checked_sub(ctx.accounts.pending_order.outcome_balance_start)
             .ok_or(PactumError::MathOverflow)?;
         require!(
             total_filled_outcome_atoms == 0,
@@ -622,7 +607,7 @@ pub mod pactum_vault {
             .checked_sub(ctx.accounts.pending_order.refund_usdc_balance_before)
             .ok_or(PactumError::MathOverflow)?;
         require!(
-            refund_usdc == ctx.accounts.pending_order.cost_basis_usdc,
+            refund_usdc >= ctx.accounts.pending_order.cost_basis_usdc,
             PactumError::InvalidDflowRefund
         );
 
@@ -640,7 +625,7 @@ pub mod pactum_vault {
             .accounts
             .config
             .open_exposure_usdc
-            .checked_sub(refund_usdc)
+            .checked_sub(ctx.accounts.pending_order.cost_basis_usdc)
             .ok_or(PactumError::MathOverflow)?;
 
         emit!(DflowOrderUnwound {
@@ -648,7 +633,7 @@ pub mod pactum_vault {
             order_account: ctx.accounts.pending_order.order_account,
             market_ledger: ctx.accounts.pending_order.market_ledger,
             outcome_mint: ctx.accounts.pending_order.outcome_mint,
-            refunded_usdc: refund_usdc,
+            refunded_usdc: ctx.accounts.pending_order.cost_basis_usdc,
         });
 
         Ok(())
@@ -886,8 +871,8 @@ pub mod pactum_vault {
         pending.outcome_mint = ctx.accounts.outcome_mint.key();
         pending.cost_basis_usdc = cost_basis_usdc;
         pending.quoted_outcome_atoms = quoted_outcome_atoms;
-        pending.outcome_balance_before = outcome_balance_before;
-        pending.filled_outcome_atoms = 0;
+        pending.outcome_balance_start = outcome_balance_before;
+        pending.outcome_balance_observed = outcome_balance_before;
         pending.refund_usdc_balance_before = 0;
         pending.slippage_bps = slippage_bps;
         pending.bump = ctx.bumps.pending_order;
@@ -1372,12 +1357,7 @@ pub struct ExecuteTrade<'info> {
     #[account(
         init,
         payer = keeper,
-        seeds = [
-            b"pending_order",
-            config.key().as_ref(),
-            approved_market.market_ledger.as_ref(),
-            outcome_mint.key().as_ref()
-        ],
+        seeds = [b"pending_order", config.key().as_ref()],
         bump,
         space = 8 + PendingDflowOrder::LEN
     )]
@@ -1451,12 +1431,7 @@ pub struct ReconcileDflowFill<'info> {
 
     #[account(
         mut,
-        seeds = [
-            b"pending_order",
-            config.key().as_ref(),
-            approved_market.market_ledger.as_ref(),
-            outcome_mint.key().as_ref()
-        ],
+        seeds = [b"pending_order", config.key().as_ref()],
         bump = pending_order.bump,
         constraint = pending_order.market_ledger == approved_market.market_ledger,
         constraint = pending_order.outcome_mint == outcome_mint.key()
@@ -1539,12 +1514,7 @@ pub struct FinalizeDflowFilledOrder<'info> {
     #[account(
         mut,
         close = keeper,
-        seeds = [
-            b"pending_order",
-            config.key().as_ref(),
-            approved_market.market_ledger.as_ref(),
-            outcome_mint.key().as_ref()
-        ],
+        seeds = [b"pending_order", config.key().as_ref()],
         bump = pending_order.bump,
         constraint = pending_order.market_ledger == approved_market.market_ledger,
         constraint = pending_order.outcome_mint == outcome_mint.key()
@@ -1642,12 +1612,7 @@ pub struct UnwindDflowOrder<'info> {
     #[account(
         mut,
         close = keeper,
-        seeds = [
-            b"pending_order",
-            config.key().as_ref(),
-            approved_market.market_ledger.as_ref(),
-            outcome_mint.key().as_ref()
-        ],
+        seeds = [b"pending_order", config.key().as_ref()],
         bump = pending_order.bump,
         constraint = pending_order.market_ledger == approved_market.market_ledger,
         constraint = pending_order.outcome_mint == outcome_mint.key()
@@ -1880,12 +1845,7 @@ pub struct SeedPendingDflowOrder<'info> {
     #[account(
         init,
         payer = admin,
-        seeds = [
-            b"pending_order",
-            config.key().as_ref(),
-            approved_market.market_ledger.as_ref(),
-            outcome_mint.key().as_ref()
-        ],
+        seeds = [b"pending_order", config.key().as_ref()],
         bump,
         space = 8 + PendingDflowOrder::LEN
     )]
