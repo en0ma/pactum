@@ -2,11 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::error::PactumError;
 
-pub fn shares_for_deposit(
-    amount: u64,
-    total_shares: u64,
-    liquid_usdc_before: u64,
-) -> Result<u64> {
+pub fn shares_for_deposit(amount: u64, total_shares: u64, liquid_usdc_before: u64) -> Result<u64> {
     if amount == 0 {
         return err!(PactumError::ZeroAmount);
     }
@@ -31,11 +27,7 @@ pub fn shares_for_deposit(
     u64::try_from(shares).map_err(|_| error!(PactumError::MathOverflow))
 }
 
-pub fn usdc_for_withdrawal(
-    shares: u64,
-    total_shares: u64,
-    liquid_usdc: u64,
-) -> Result<u64> {
+pub fn usdc_for_withdrawal(shares: u64, total_shares: u64, liquid_usdc: u64) -> Result<u64> {
     require!(shares > 0, PactumError::ZeroAmount);
     require!(total_shares > 0, PactumError::MathOverflow);
 
