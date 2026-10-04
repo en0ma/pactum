@@ -406,6 +406,32 @@ pub mod pactum_vault {
         Ok(())
     }
 
+    /// CI-only helper that creates tracked exposure for fork fixtures.
+    #[cfg(feature = "test-hooks")]
+    pub fn seed_market_exposure(
+        ctx: Context<SeedMarketExposure>,
+        cost_basis_usdc: u64,
+        outcome_atoms: u64,
+    ) -> Result<()> {
+        require!(cost_basis_usdc > 0 && outcome_atoms > 0, PactumError::ZeroAmount);
+
+        let exposure = &mut ctx.accounts.market_exposure;
+        exposure.market_ledger = ctx.accounts.approved_market.market_ledger;
+        exposure.outcome_mint = ctx.accounts.outcome_mint.key();
+        exposure.cost_basis_usdc = cost_basis_usdc;
+        exposure.outcome_atoms = outcome_atoms;
+        exposure.bump = ctx.bumps.market_exposure;
+
+        ctx.accounts.config.open_exposure_usdc = ctx
+            .accounts
+            .config
+            .open_exposure_usdc
+            .checked_add(cost_basis_usdc)
+            .ok_or(PactumError::MathOverflow)?;
+
+        Ok(())
+    }
+
     /// CI-only DFlow CPI smoke test. It intentionally sends invalid data to
     /// DFlow; the fork test passes only if simulation logs prove the inner
     /// DFlow invocation happened. This handler is absent in production builds.
@@ -798,6 +824,46 @@ pub struct RedeemMarketOutcome<'info> {
 
 #[derive(Accounts)]
 pub struct BenchmarkNoop {}
+
+#[cfg(feature = "test-hooks")]
+#[derive(Accounts)]
+pub struct SeedMarketExposure<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.config_bump,
+        has_one = admin
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    #[account(
+        seeds = [b"market", approved_market.market_ledger.as_ref()],
+        bump = approved_market.bump
+    )]
+    pub approved_market: Account<'info, ApprovedMarket>,
+
+    /// CHECK: test fixture only; the production redeem path validates Token-2022 ownership.
+    pub outcome_mint: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        seeds = [
+            b"exposure",
+            config.key().as_ref(),
+            approved_market.market_ledger.as_ref(),
+            outcome_mint.key().as_ref()
+        ],
+        bump,
+        space = 8 + MarketExposure::LEN
+    )]
+    pub market_exposure: Account<'info, MarketExposure>,
+
+    pub system_program: Program<'info, System>,
+}
 
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
