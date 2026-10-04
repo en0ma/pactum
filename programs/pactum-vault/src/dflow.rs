@@ -5,8 +5,7 @@ use solana_pubkey::pubkey;
 ///
 /// Raw prediction-market ABIs are isolated here because instruction layouts are
 /// less stable than DFlow's public API/event surfaces.
-pub const DFLOW_PREDICTION_MARKETS: Pubkey =
-    pubkey!("pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb");
+pub const DFLOW_PREDICTION_MARKETS: Pubkey = pubkey!("pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb");
 
 /// DFlow router/orchestrator program observed on Solana mainnet.
 pub const DFLOW_ROUTER: Pubkey = pubkey!("DF1ow4tspfHX9JwWJsAb9epbkA8hmpSEAtxXy1V27QBH");
