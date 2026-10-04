@@ -13,6 +13,8 @@ import {
 import { requireRpcMetric } from "./metric-guard.mjs";
 
 const RPC_URL = process.env.SURFPOOL_RPC_URL ?? "http://127.0.0.1:8899";
+const MAINNET_RPC_URL =
+  process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const PROGRAM_ID = new PublicKey(
   process.env.PACTUM_PROGRAM_ID ?? "AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw",
 );
@@ -111,6 +113,180 @@ async function surfpoolRpc(method, params) {
     throw new Error(`${method} failed: ${JSON.stringify(body.error)}`);
   }
   return body.result;
+}
+
+
+const BASE58_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const BASE58_MAP = new Map([...BASE58_ALPHABET].map((ch, i) => [ch, BigInt(i)]));
+
+function decodeBase58(text) {
+  let value = 0n;
+  for (const ch of text) {
+    const digit = BASE58_MAP.get(ch);
+    if (digit === undefined) throw new Error(`invalid base58 character: ${ch}`);
+    value = value * 58n + digit;
+  }
+  const bytes = [];
+  while (value > 0n) {
+    bytes.push(Number(value & 0xffn));
+    value >>= 8n;
+  }
+  bytes.reverse();
+  let leadingZeroes = 0;
+  while (leadingZeroes < text.length && text[leadingZeroes] === "1") {
+    leadingZeroes += 1;
+  }
+  return Buffer.concat([Buffer.alloc(leadingZeroes), Buffer.from(bytes)]);
+}
+
+async function jsonRpc(url, method, params) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  const body = await response.json();
+  if (body.error) {
+    throw new Error(`${method} failed: ${JSON.stringify(body.error)}`);
+  }
+  return body.result;
+}
+
+async function jsonRpcBatch(url, calls) {
+  const payload = calls.map((call, index) => ({
+    jsonrpc: "2.0",
+    id: index + 1,
+    method: call.method,
+    params: call.params,
+  }));
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json();
+  if (!Array.isArray(body)) {
+    throw new Error(`batch RPC returned non-array: ${JSON.stringify(body)}`);
+  }
+  const byId = new Map(body.map((item) => [item.id, item]));
+  return payload.map((item) => {
+    const result = byId.get(item.id);
+    if (!result) throw new Error(`missing batch RPC result for id ${item.id}`);
+    if (result.error) {
+      throw new Error(`batch RPC error: ${JSON.stringify(result.error)}`);
+    }
+    return result.result;
+  });
+}
+
+function resolvedMessageKeys(tx) {
+  const staticKeys = tx.transaction.message.accountKeys ?? [];
+  const loaded = tx.meta?.loadedAddresses ?? { writable: [], readonly: [] };
+  return [...staticKeys, ...(loaded.writable ?? []), ...(loaded.readonly ?? [])];
+}
+
+function allCompiledInstructions(tx) {
+  const top = tx.transaction.message.instructions ?? [];
+  const inner = (tx.meta?.innerInstructions ?? []).flatMap((group) => group.instructions ?? []);
+  return [...top, ...inner];
+}
+
+function terminalDflowEventType(tx, keys) {
+  for (const ix of allCompiledInstructions(tx)) {
+    if (typeof ix.programIdIndex !== "number" || typeof ix.data !== "string") continue;
+    if (keys[ix.programIdIndex] !== DFLOW_PM.toBase58()) continue;
+    const data = decodeBase58(ix.data);
+    if (
+      data.length >= 10 &&
+      data[0] === 0xf0 &&
+      data.subarray(1, 8).every((byte) => byte === 0) &&
+      data[8] === 0x02 &&
+      (data[9] === 0x03 || data[9] === 0x04)
+    ) {
+      return data[9];
+    }
+  }
+  return null;
+}
+
+function dflowReferencedIndexes(tx, keys) {
+  const indexes = new Set();
+  for (const ix of allCompiledInstructions(tx)) {
+    if (typeof ix.programIdIndex !== "number") continue;
+    if (keys[ix.programIdIndex] !== DFLOW_PM.toBase58()) continue;
+    for (const index of ix.accounts ?? []) indexes.add(index);
+  }
+  return indexes;
+}
+
+async function probeDflowTerminalAccountClosure() {
+  const signatures = await jsonRpc(MAINNET_RPC_URL, "getSignaturesForAddress", [
+    DFLOW_PM.toBase58(),
+    { limit: 60 },
+  ]);
+  const candidates = signatures
+    .filter((entry) => entry.err === null)
+    .slice(0, 40);
+
+  const transactions = await jsonRpcBatch(
+    MAINNET_RPC_URL,
+    candidates.map((entry) => ({
+      method: "getTransaction",
+      params: [
+        entry.signature,
+        { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+      ],
+    })),
+  );
+
+  const rent344 = await jsonRpc(
+    MAINNET_RPC_URL,
+    "getMinimumBalanceForRentExemption",
+    [344, { commitment: "confirmed" }],
+  );
+
+  const evidence = [];
+  for (let i = 0; i < transactions.length; i += 1) {
+    const tx = transactions[i];
+    if (!tx?.meta || tx.meta.err) continue;
+    const keys = resolvedMessageKeys(tx);
+    const terminalType = terminalDflowEventType(tx, keys);
+    if (terminalType === null) continue;
+
+    const referenced = dflowReferencedIndexes(tx, keys);
+    const closedOrderCandidates = [];
+    for (const index of referenced) {
+      const pre = tx.meta.preBalances?.[index] ?? 0;
+      const post = tx.meta.postBalances?.[index] ?? 0;
+      if (pre === rent344 && post === 0) {
+        closedOrderCandidates.push(keys[index]);
+      }
+    }
+
+    evidence.push({
+      signature: candidates[i].signature,
+      terminalType: terminalType === 0x03 ? "cancel" : "revert",
+      closedOrderCandidates,
+    });
+
+    if (evidence.length >= 2) break;
+  }
+
+  if (evidence.length === 0) {
+    throw new Error(
+      "No recent DFlow Cancel/Revert events found; cannot establish terminal account-closure proof",
+    );
+  }
+  for (const item of evidence) {
+    if (item.closedOrderCandidates.length !== 1) {
+      throw new Error(
+        `Terminal DFlow tx ${item.signature} had ${item.closedOrderCandidates.length} 344-byte-rent closed DFlow account candidates`,
+      );
+    }
+  }
+
+  return { rent344, evidence };
 }
 
 async function main() {
@@ -531,6 +707,8 @@ async function main() {
     throw new Error("reconciliation replay unexpectedly accepted a zero fill delta");
   }
 
+  const dflowTerminalClosure = await probeDflowTerminalAccountClosure();
+
   console.log(JSON.stringify({
     rpc: RPC_URL,
     pactumProgram: PROGRAM_ID.toBase58(),
@@ -566,6 +744,7 @@ async function main() {
       computeUnits: openProbeCu,
       cuBudget: DFLOW_OPEN_PROBE_CU_BUDGET,
     },
+    dflowTerminalClosure,
     dflowFillReconciliation: {
       outcomeAta: outcomeAta.toBase58(),
       pendingRetainedUntilTerminalProof: pendingInfo !== null,
