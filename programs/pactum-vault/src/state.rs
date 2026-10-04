@@ -62,7 +62,6 @@ impl ApprovedMarket {
     pub const LEN: usize = 32 + 32 + 32 + 32 + 1 + 1;
 }
 
-
 #[account]
 pub struct MarketExposure {
     pub market_ledger: Pubkey,
