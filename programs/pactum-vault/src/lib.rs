@@ -1304,7 +1304,6 @@ pub struct ProbeDflowOpenOrderPda<'info> {
     #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
     pub dflow_program: UncheckedAccount<'info>,
 }
-
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
 pub struct ProbeDflowPdaSignedCpi<'info> {
