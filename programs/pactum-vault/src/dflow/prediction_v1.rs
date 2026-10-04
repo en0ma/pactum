@@ -159,10 +159,12 @@ pub fn minimum_outcome_atoms(quoted_outcome_atoms: u64, slippage_bps: u16) -> Re
         PactumError::InvalidSlippage
     );
 
-    quoted_outcome_atoms
-        .checked_mul(BPS_DENOMINATOR - u64::from(slippage_bps))
-        .ok_or(PactumError::MathOverflow)
-        .map(|value| value / BPS_DENOMINATOR)
+    Ok(
+        quoted_outcome_atoms
+            .checked_mul(BPS_DENOMINATOR - u64::from(slippage_bps))
+            .ok_or(PactumError::MathOverflow)?
+            / BPS_DENOMINATOR,
+    )
 }
 
 pub fn validate_open_order_data(
