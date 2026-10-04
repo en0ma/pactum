@@ -12,6 +12,7 @@ pub const FILL_USER_ORDER_ACTION: u64 = 0x41;
 pub const REDEEM_MARKET_OUTCOME_ACTION: u64 = 0x58;
 
 pub const OPEN_USER_ORDER_DATA_LEN: usize = 80;
+pub const OBSERVED_USER_ORDER_ACCOUNT_LEN: usize = 344;
 pub const FILL_USER_ORDER_DATA_LEN: usize = 32;
 pub const REDEEM_MARKET_OUTCOME_DATA_LEN: usize = 8;
 pub const MAX_TRADE_SLIPPAGE_BPS: u16 = 500;
