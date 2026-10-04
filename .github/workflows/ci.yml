@@ -65,6 +65,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Rust unit tests
+        run: cargo test --workspace
+
       - name: Build production program
         run: anchor build
 
