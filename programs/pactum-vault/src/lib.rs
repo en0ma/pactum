@@ -654,8 +654,6 @@ pub mod pactum_vault {
         invoke(&ix, &[ctx.accounts.dflow_program.to_account_info()]).map_err(Into::into)
     }
 
-
-
     /// CI-only fork probe for the observed OpenUserOrder account shape.
     ///
     /// Uses the same three repeated PDA signer roles as production execute_trade
@@ -1264,7 +1262,6 @@ pub struct ProbeDflowPredictionCpi<'info> {
     #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
     pub dflow_program: UncheckedAccount<'info>,
 }
-
 
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
