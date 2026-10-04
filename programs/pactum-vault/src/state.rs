@@ -88,10 +88,12 @@ pub struct PendingDflowOrder {
     pub outcome_balance_before: u64,
     /// Total outcome atoms observed across all reconciled async fills.
     pub filled_outcome_atoms: u64,
+    /// Canonical VaultAuthority USDC ATA balance immediately before OpenUserOrder.
+    pub refund_usdc_balance_before: u64,
     pub slippage_bps: u16,
     pub bump: u8,
 }
 
 impl PendingDflowOrder {
-    pub const LEN: usize = 32 + 32 + 32 + 8 + 8 + 8 + 8 + 2 + 1;
+    pub const LEN: usize = 32 + 32 + 32 + 8 + 8 + 8 + 8 + 8 + 2 + 1;
 }
