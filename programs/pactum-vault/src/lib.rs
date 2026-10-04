@@ -654,6 +654,58 @@ pub mod pactum_vault {
         invoke(&ix, &[ctx.accounts.dflow_program.to_account_info()]).map_err(Into::into)
     }
 
+
+
+    /// CI-only fork probe for the observed OpenUserOrder account shape.
+    ///
+    /// Uses the same three repeated PDA signer roles as production execute_trade
+    /// and the confirmed 80-byte action-0x40 payload shape. The fork test asserts
+    /// that the CPI reaches the real DFlow PM program without signer escalation.
+    #[cfg(feature = "test-hooks")]
+    pub fn probe_dflow_open_order_pda(
+        ctx: Context<ProbeDflowOpenOrderPda>,
+        order_data: [u8; dflow::prediction_v1::OPEN_USER_ORDER_DATA_LEN],
+    ) -> Result<()> {
+        let ix = Instruction {
+            program_id: dflow::DFLOW_PREDICTION_MARKETS,
+            accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
+                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new(ctx.accounts.market_usdc_account.key(), false),
+                AccountMeta::new(ctx.accounts.order_account.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
+                AccountMeta::new(ctx.accounts.source_usdc.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
+            ],
+            data: order_data.to_vec(),
+        };
+
+        let bump = [ctx.bumps.probe_authority];
+        let seeds: &[&[u8]] = &[b"dflow_open_order_probe", &bump];
+
+        solana_cpi::invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.event_authority.to_account_info(),
+                ctx.accounts.market_ledger.to_account_info(),
+                ctx.accounts.market_usdc_account.to_account_info(),
+                ctx.accounts.order_account.to_account_info(),
+                ctx.accounts.usdc_mint.to_account_info(),
+                ctx.accounts.source_usdc.to_account_info(),
+                ctx.accounts.probe_authority.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.dflow_program.to_account_info(),
+            ],
+            &[seeds],
+        )
+        .map_err(Into::into)
+    }
+
     /// CI-only proof that Solana accepts a Pactum PDA as an inner DFlow signer.
     /// DFlow is expected to reject the deliberately invalid payload after entry.
     #[cfg(feature = "test-hooks")]
@@ -1209,6 +1261,46 @@ pub struct SeedMarketExposure<'info> {
 #[derive(Accounts)]
 pub struct ProbeDflowPredictionCpi<'info> {
     /// CHECK: pinned to the known DFlow prediction-market program.
+    #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
+    pub dflow_program: UncheckedAccount<'info>,
+}
+
+
+#[cfg(feature = "test-hooks")]
+#[derive(Accounts)]
+pub struct ProbeDflowOpenOrderPda<'info> {
+    /// CHECK: deterministic CI-only PDA standing in for VaultAuthority signer roles.
+    #[account(seeds = [b"dflow_open_order_probe"], bump)]
+    pub probe_authority: UncheckedAccount<'info>,
+
+    /// CHECK: fixed DFlow event authority.
+    #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
+    pub event_authority: UncheckedAccount<'info>,
+
+    /// CHECK: forked DFlow market ledger supplied by the test fixture.
+    #[account(mut)]
+    pub market_ledger: UncheckedAccount<'info>,
+
+    /// CHECK: forked DFlow market USDC account supplied by the test fixture.
+    #[account(mut)]
+    pub market_usdc_account: UncheckedAccount<'info>,
+
+    /// CHECK: candidate DFlow order account. DFlow may reject it after CPI entry.
+    #[account(mut)]
+    pub order_account: UncheckedAccount<'info>,
+
+    /// CHECK: canonical mainnet USDC mint.
+    #[account(address = dflow::USDC_MINT)]
+    pub usdc_mint: UncheckedAccount<'info>,
+
+    /// CHECK: PDA-owned source USDC fixture seeded by Surfpool.
+    #[account(mut)]
+    pub source_usdc: UncheckedAccount<'info>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: fixed DFlow prediction-market program.
     #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
     pub dflow_program: UncheckedAccount<'info>,
 }
