@@ -167,6 +167,36 @@ pub fn minimum_outcome_atoms(quoted_outcome_atoms: u64, slippage_bps: u16) -> Re
     )
 }
 
+pub fn minimum_outcome_for_consumed_input(
+    quoted_outcome_atoms: u64,
+    quoted_input_atoms: u64,
+    consumed_input_atoms: u64,
+    slippage_bps: u16,
+) -> Result<u64> {
+    require!(quoted_input_atoms > 0, PactumError::ZeroAmount);
+    require!(
+        consumed_input_atoms <= quoted_input_atoms,
+        PactumError::InvalidDflowRefund
+    );
+    require!(
+        slippage_bps <= MAX_TRADE_SLIPPAGE_BPS,
+        PactumError::InvalidSlippage
+    );
+
+    let numerator = u128::from(quoted_outcome_atoms)
+        .checked_mul(u128::from(consumed_input_atoms))
+        .and_then(|value| {
+            value.checked_mul(u128::from(BPS_DENOMINATOR - u64::from(slippage_bps)))
+        })
+        .ok_or(PactumError::MathOverflow)?;
+    let denominator = u128::from(quoted_input_atoms)
+        .checked_mul(u128::from(BPS_DENOMINATOR))
+        .ok_or(PactumError::MathOverflow)?;
+
+    u64::try_from(numerator / denominator)
+        .map_err(|_| error!(PactumError::MathOverflow))
+}
+
 pub fn validate_open_order_data(
     data: &[u8],
     expected_input_amount: u64,
@@ -372,6 +402,21 @@ mod tests {
     fn computes_minimum_outcome_atoms() {
         assert_eq!(minimum_outcome_atoms(11_000_000, 50).unwrap(), 10_945_000);
         assert!(minimum_outcome_atoms(11_000_000, MAX_TRADE_SLIPPAGE_BPS + 1).is_err());
+    }
+
+    #[test]
+    fn prorates_slippage_floor_for_partial_terminal_fill() {
+        assert_eq!(
+            minimum_outcome_for_consumed_input(11_000_000, 948_096, 474_048, 50).unwrap(),
+            5_472_500
+        );
+        assert_eq!(
+            minimum_outcome_for_consumed_input(11_000_000, 948_096, 0, 50).unwrap(),
+            0
+        );
+        assert!(
+            minimum_outcome_for_consumed_input(11_000_000, 948_096, 948_097, 50).is_err()
+        );
     }
 
     #[test]
