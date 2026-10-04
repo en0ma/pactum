@@ -715,6 +715,41 @@ pub mod pactum_vault {
         Ok(())
     }
 
+    /// CI-only helper that seeds an asynchronous DFlow order awaiting fill reconciliation.
+    #[cfg(feature = "test-hooks")]
+    pub fn seed_pending_dflow_order(
+        ctx: Context<SeedPendingDflowOrder>,
+        cost_basis_usdc: u64,
+        quoted_outcome_atoms: u64,
+        outcome_balance_before: u64,
+        slippage_bps: u16,
+    ) -> Result<()> {
+        require!(cost_basis_usdc > 0, PactumError::ZeroAmount);
+        let _ = dflow::prediction_v1::minimum_outcome_atoms(
+            quoted_outcome_atoms,
+            slippage_bps,
+        )?;
+
+        let pending = &mut ctx.accounts.pending_order;
+        pending.order_account = ctx.accounts.order_account.key();
+        pending.market_ledger = ctx.accounts.approved_market.market_ledger;
+        pending.outcome_mint = ctx.accounts.outcome_mint.key();
+        pending.cost_basis_usdc = cost_basis_usdc;
+        pending.quoted_outcome_atoms = quoted_outcome_atoms;
+        pending.outcome_balance_before = outcome_balance_before;
+        pending.slippage_bps = slippage_bps;
+        pending.bump = ctx.bumps.pending_order;
+
+        ctx.accounts.config.open_exposure_usdc = ctx
+            .accounts
+            .config
+            .open_exposure_usdc
+            .checked_add(cost_basis_usdc)
+            .ok_or(PactumError::MathOverflow)?;
+
+        Ok(())
+    }
+
     /// CI-only DFlow CPI smoke test. It intentionally sends invalid data to
     /// DFlow; the fork test passes only if simulation logs prove the inner
     /// DFlow invocation happened. This handler is absent in production builds.
@@ -1428,6 +1463,52 @@ pub struct SeedMarketExposure<'info> {
         space = 8 + MarketExposure::LEN
     )]
     pub market_exposure: Account<'info, MarketExposure>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[cfg(feature = "test-hooks")]
+#[derive(Accounts)]
+pub struct SeedPendingDflowOrder<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.config_bump,
+        has_one = admin
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    #[account(
+        seeds = [b"market", approved_market.market_ledger.as_ref()],
+        bump = approved_market.bump
+    )]
+    pub approved_market: Account<'info, ApprovedMarket>,
+
+    /// CHECK: synthetic DFlow-owned order account for fork reconciliation setup.
+    pub order_account: UncheckedAccount<'info>,
+
+    #[account(
+        constraint = *outcome_mint.to_account_info().owner
+            == dflow::prediction_v1::TOKEN_2022_PROGRAM
+    )]
+    pub outcome_mint: InterfaceAccount<'info, InterfaceMint>,
+
+    #[account(
+        init,
+        payer = admin,
+        seeds = [
+            b"pending_order",
+            config.key().as_ref(),
+            approved_market.market_ledger.as_ref(),
+            outcome_mint.key().as_ref()
+        ],
+        bump,
+        space = 8 + PendingDflowOrder::LEN
+    )]
+    pub pending_order: Account<'info, PendingDflowOrder>,
 
     pub system_program: Program<'info, System>,
 }
