@@ -32,6 +32,10 @@ pub enum PactumError {
     InvalidDflowFixture,
     #[msg("DFlow accounts do not match Pactum's approved market/custody constraints")]
     InvalidDflowAccounts,
+    #[msg("DFlow did not debit exactly the validated trade amount")]
+    InvalidDflowSpend,
+    #[msg("Trade slippage exceeds Pactum's protocol cap")]
+    InvalidSlippage,
     #[msg("Tracked market exposure does not match the redeemable position")]
     InvalidMarketExposure,
     #[msg("DFlow redemption did not burn the complete tracked outcome position")]
