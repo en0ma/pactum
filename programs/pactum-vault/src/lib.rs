@@ -407,6 +407,54 @@ pub mod pactum_vault {
         Ok(())
     }
 
+    /// Transitional production initializer for tracked exposure until the
+    /// OpenUserOrder path can create it atomically from a confirmed DFlow fill.
+    ///
+    /// Admin-only by design: keepers must not be able to fabricate exposure and
+    /// freeze deposits/withdrawals. This instruction cannot move vault funds.
+    pub fn initialize_market_exposure(
+        ctx: Context<InitializeMarketExposure>,
+        cost_basis_usdc: u64,
+        outcome_atoms: u64,
+    ) -> Result<()> {
+        require!(cost_basis_usdc > 0 && outcome_atoms > 0, PactumError::ZeroAmount);
+        math::validate_trade_amount(
+            cost_basis_usdc,
+            ctx.accounts.config.open_exposure_usdc,
+            ctx.accounts.config.max_trade_usdc,
+            ctx.accounts.config.max_total_exposure_usdc,
+        )?;
+
+        require!(ctx.accounts.approved_market.enabled, PactumError::MarketDisabled);
+        let _side = dflow::prediction_v1::OutcomeSide::from_mint(
+            &ctx.accounts.approved_market,
+            ctx.accounts.outcome_mint.key(),
+        )?;
+
+        let exposure = &mut ctx.accounts.market_exposure;
+        exposure.market_ledger = ctx.accounts.approved_market.market_ledger;
+        exposure.outcome_mint = ctx.accounts.outcome_mint.key();
+        exposure.cost_basis_usdc = cost_basis_usdc;
+        exposure.outcome_atoms = outcome_atoms;
+        exposure.bump = ctx.bumps.market_exposure;
+
+        ctx.accounts.config.open_exposure_usdc = ctx
+            .accounts
+            .config
+            .open_exposure_usdc
+            .checked_add(cost_basis_usdc)
+            .ok_or(PactumError::MathOverflow)?;
+
+        emit!(MarketExposureInitialized {
+            market_ledger: exposure.market_ledger,
+            outcome_mint: exposure.outcome_mint,
+            cost_basis_usdc,
+            outcome_atoms,
+        });
+
+        Ok(())
+    }
+
     /// CI-only helper that creates tracked exposure for fork fixtures.
     #[cfg(feature = "test-hooks")]
     pub fn seed_market_exposure(
@@ -826,6 +874,48 @@ pub struct RedeemMarketOutcome<'info> {
 #[derive(Accounts)]
 pub struct BenchmarkNoop {}
 
+#[derive(Accounts)]
+pub struct InitializeMarketExposure<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.config_bump,
+        has_one = admin
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    #[account(
+        seeds = [b"market", approved_market.market_ledger.as_ref()],
+        bump = approved_market.bump
+    )]
+    pub approved_market: Account<'info, ApprovedMarket>,
+
+    #[account(
+        constraint = *outcome_mint.to_account_info().owner
+            == dflow::prediction_v1::TOKEN_2022_PROGRAM
+    )]
+    pub outcome_mint: InterfaceAccount<'info, InterfaceMint>,
+
+    #[account(
+        init,
+        payer = admin,
+        seeds = [
+            b"exposure",
+            config.key().as_ref(),
+            approved_market.market_ledger.as_ref(),
+            outcome_mint.key().as_ref()
+        ],
+        bump,
+        space = 8 + MarketExposure::LEN
+    )]
+    pub market_exposure: Account<'info, MarketExposure>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
 pub struct SeedMarketExposure<'info> {
@@ -931,6 +1021,14 @@ pub struct WithdrawalEvent {
     pub user: Pubkey,
     pub amount: u64,
     pub shares: u64,
+}
+
+#[event]
+pub struct MarketExposureInitialized {
+    pub market_ledger: Pubkey,
+    pub outcome_mint: Pubkey,
+    pub cost_basis_usdc: u64,
+    pub outcome_atoms: u64,
 }
 
 #[event]
