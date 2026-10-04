@@ -1346,6 +1346,15 @@ pub struct ExecuteTrade<'info> {
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
     #[account(
+        init_if_needed,
+        payer = keeper,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = vault_authority,
+        associated_token::token_program = token_program
+    )]
+    pub refund_usdc_ata: Box<Account<'info, TokenAccount>>,
+
+    #[account(
         constraint = *outcome_mint.to_account_info().owner
             == dflow::prediction_v1::TOKEN_2022_PROGRAM
     )]
