@@ -408,7 +408,7 @@ pub mod pactum_vault {
         pending.market_ledger = ctx.accounts.market_ledger.key();
         pending.outcome_mint = ctx.accounts.outcome_mint.key();
         pending.cost_basis_usdc = input_amount;
-        pending.quoted_outcome_atoms = decoded.quoted_output_amount;
+        pending.quoted_outcome_atoms = quoted_outcome_atoms;
         pending.outcome_balance_start = outcome_balance_before;
         pending.outcome_balance_observed = outcome_balance_before;
         pending.refund_usdc_balance_before = refund_usdc_balance_before;
@@ -484,9 +484,7 @@ pub mod pactum_vault {
     /// Terminal proof is the DFlow user-order account having been deallocated.
     /// Any unconsumed USDC must have returned to the canonical VaultAuthority
     /// USDC ATA and is swept back into the Pactum vault.
-    pub fn finalize_dflow_filled_order(
-        ctx: Context<FinalizeDflowFilledOrder>,
-    ) -> Result<()> {
+    pub fn finalize_dflow_filled_order(ctx: Context<FinalizeDflowFilledOrder>) -> Result<()> {
         require_dflow_order_closed(&ctx.accounts.order_account)?;
 
         let total_filled_outcome_atoms = ctx
@@ -506,8 +504,7 @@ pub mod pactum_vault {
             .amount
             .checked_sub(ctx.accounts.pending_order.refund_usdc_balance_before)
             .ok_or(PactumError::MathOverflow)?;
-        let recognized_refund_usdc =
-            refund_usdc.min(ctx.accounts.pending_order.cost_basis_usdc);
+        let recognized_refund_usdc = refund_usdc.min(ctx.accounts.pending_order.cost_basis_usdc);
         let consumed_usdc = ctx
             .accounts
             .pending_order
@@ -516,13 +513,12 @@ pub mod pactum_vault {
             .ok_or(PactumError::MathOverflow)?;
         require!(consumed_usdc > 0, PactumError::InvalidDflowRefund);
 
-        let minimum_outcome_atoms =
-            dflow::prediction_v1::minimum_outcome_for_consumed_input(
-                ctx.accounts.pending_order.quoted_outcome_atoms,
-                ctx.accounts.pending_order.cost_basis_usdc,
-                consumed_usdc,
-                ctx.accounts.pending_order.slippage_bps,
-            )?;
+        let minimum_outcome_atoms = dflow::prediction_v1::minimum_outcome_for_consumed_input(
+            ctx.accounts.pending_order.quoted_outcome_atoms,
+            ctx.accounts.pending_order.cost_basis_usdc,
+            consumed_usdc,
+            ctx.accounts.pending_order.slippage_bps,
+        )?;
         require!(
             total_filled_outcome_atoms >= minimum_outcome_atoms,
             PactumError::InvalidDflowFixture
