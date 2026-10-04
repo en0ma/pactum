@@ -562,6 +562,16 @@ async function main() {
   });
   await sendInstructions(connection, payer, initializeVaultIx);
 
+  await surfpoolRpc("surfnet_setAccount", [
+    OPEN_PROBE_MARKET_LEDGER.toBase58(),
+    {
+      lamports: 1_000_000,
+      owner: DFLOW_PM.toBase58(),
+      executable: false,
+      data: "",
+    },
+  ]);
+
   const registerMarketIx = new TransactionInstruction({
     programId: PROGRAM_ID,
     keys: [
