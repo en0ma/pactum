@@ -18,6 +18,7 @@ env:
   RUST_BACKTRACE: "1"
   ANCHOR_VERSION: "1.1.2"
   SOLANA_VERSION: "3.1.10"
+  PACTUM_BYTECODE_BUDGET_BYTES: "600000"
 
 jobs:
   build:
@@ -65,7 +66,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Rust unit tests
+      - name: Rust unit and property tests
         run: cargo test --workspace
 
       - name: JavaScript unit tests
@@ -73,6 +74,12 @@ jobs:
 
       - name: Build production program
         run: anchor build
+
+      - name: Enforce program bytecode budget
+        run: |
+          size_bytes="$(stat -c%s target/deploy/pactum_vault.so)"
+          echo "pactum_vault.so: ${size_bytes} bytes (budget: ${PACTUM_BYTECODE_BUDGET_BYTES})"
+          test "${size_bytes}" -le "${PACTUM_BYTECODE_BUDGET_BYTES}"
 
       - name: Build fork test hooks
         run: anchor build -- --features test-hooks
