@@ -7,6 +7,7 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
+  sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
 import { requireRpcMetric } from "./metric-guard.mjs";
@@ -36,6 +37,12 @@ const SPL_TOKEN_PROGRAM = new PublicKey(
 const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
 );
+const TOKEN_2022_PROGRAM = new PublicKey(
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+);
+const FILL_RECONCILE_OUTCOME_MINT = new PublicKey(
+  "4qeSi2JVCbE9VQt1uzTJTpJSKdMFRsqWuvf3UL9fGa2P",
+);
 const OPEN_ORDER_FIXTURE = Buffer.from(
   "4000000000000000" +
     "bb267d4554fc60a6" +
@@ -59,6 +66,9 @@ const DFLOW_OPEN_PROBE_CU_BUDGET = Number(
 const BASE_FEE_BUDGET_LAMPORTS = Number(
   process.env.PACTUM_BASE_FEE_BUDGET_LAMPORTS ?? "10000",
 );
+const FILL_RECONCILE_CU_BUDGET = Number(
+  process.env.PACTUM_FILL_RECONCILE_CU_BUDGET ?? "120000",
+);
 
 function anchorDiscriminator(name) {
   return crypto.createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
@@ -69,6 +79,25 @@ function associatedTokenAddress(owner, mint, tokenProgram = SPL_TOKEN_PROGRAM) {
     [owner.toBuffer(), tokenProgram.toBuffer(), mint.toBuffer()],
     ASSOCIATED_TOKEN_PROGRAM,
   )[0];
+}
+
+function u64Le(value) {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64LE(BigInt(value));
+  return buffer;
+}
+
+function u16Le(value) {
+  const buffer = Buffer.alloc(2);
+  buffer.writeUInt16LE(value);
+  return buffer;
+}
+
+async function sendInstructions(connection, payer, ...instructions) {
+  const tx = new Transaction().add(...instructions);
+  return sendAndConfirmTransaction(connection, tx, [payer], {
+    commitment: "confirmed",
+  });
 }
 
 async function surfpoolRpc(method, params) {
@@ -312,6 +341,204 @@ async function main() {
     );
   }
 
+
+  const [config] = PublicKey.findProgramAddressSync(
+    [Buffer.from("config")],
+    PROGRAM_ID,
+  );
+  const [vaultAuthority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault_authority")],
+    PROGRAM_ID,
+  );
+  const [vaultUsdc] = PublicKey.findProgramAddressSync(
+    [Buffer.from("usdc_vault")],
+    PROGRAM_ID,
+  );
+  const [approvedMarket] = PublicKey.findProgramAddressSync(
+    [Buffer.from("market"), OPEN_PROBE_MARKET_LEDGER.toBuffer()],
+    PROGRAM_ID,
+  );
+  const [keeperAuthorization] = PublicKey.findProgramAddressSync(
+    [Buffer.from("keeper"), config.toBuffer(), payer.publicKey.toBuffer()],
+    PROGRAM_ID,
+  );
+  const [pendingOrder] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("pending_order"),
+      config.toBuffer(),
+      OPEN_PROBE_MARKET_LEDGER.toBuffer(),
+      FILL_RECONCILE_OUTCOME_MINT.toBuffer(),
+    ],
+    PROGRAM_ID,
+  );
+  const [marketExposure] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("exposure"),
+      config.toBuffer(),
+      OPEN_PROBE_MARKET_LEDGER.toBuffer(),
+      FILL_RECONCILE_OUTCOME_MINT.toBuffer(),
+    ],
+    PROGRAM_ID,
+  );
+
+  const initializeVaultIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+      { pubkey: vaultAuthority, isSigner: false, isWritable: false },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: vaultUsdc, isSigner: false, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("initialize_vault"),
+      u64Le(5_000_000),
+      u64Le(20_000_000),
+      u64Le(0),
+    ]),
+  });
+  await sendInstructions(connection, payer, initializeVaultIx);
+
+  const registerMarketIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: false },
+      { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: false },
+      { pubkey: approvedMarket, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("register_market"),
+      OPEN_PROBE_MARKET_USDC.toBuffer(),
+      FILL_RECONCILE_OUTCOME_MINT.toBuffer(),
+      Keypair.generate().publicKey.toBuffer(),
+    ]),
+  });
+  await sendInstructions(connection, payer, registerMarketIx);
+
+  const authorizeKeeperIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: false },
+      { pubkey: payer.publicKey, isSigner: false, isWritable: false },
+      { pubkey: keeperAuthorization, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("authorize_keeper"),
+  });
+  await sendInstructions(connection, payer, authorizeKeeperIx);
+
+  const syntheticOrderAccount = Keypair.generate().publicKey;
+  await surfpoolRpc("surfnet_setAccount", [
+    syntheticOrderAccount.toBase58(),
+    {
+      lamports: 1_000_000,
+      owner: DFLOW_PM.toBase58(),
+      executable: false,
+      data: "00".repeat(344),
+    },
+  ]);
+
+  const reconcileCostBasis = 948_096n;
+  const reconcileQuotedOutcome = 11_000_000n;
+  const reconcileSlippageBps = 50;
+
+  const seedPendingIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+      { pubkey: approvedMarket, isSigner: false, isWritable: false },
+      { pubkey: syntheticOrderAccount, isSigner: false, isWritable: false },
+      { pubkey: FILL_RECONCILE_OUTCOME_MINT, isSigner: false, isWritable: false },
+      { pubkey: pendingOrder, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("seed_pending_dflow_order"),
+      u64Le(reconcileCostBasis),
+      u64Le(reconcileQuotedOutcome),
+      u64Le(0),
+      u16Le(reconcileSlippageBps),
+    ]),
+  });
+  await sendInstructions(connection, payer, seedPendingIx);
+
+  const outcomeAta = associatedTokenAddress(
+    vaultAuthority,
+    FILL_RECONCILE_OUTCOME_MINT,
+    TOKEN_2022_PROGRAM,
+  );
+  await surfpoolRpc("surfnet_setTokenAccount", [
+    vaultAuthority.toBase58(),
+    FILL_RECONCILE_OUTCOME_MINT.toBase58(),
+    { amount: Number(reconcileQuotedOutcome), state: "initialized" },
+    TOKEN_2022_PROGRAM.toBase58(),
+  ]);
+
+  const reconcileIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: false },
+      { pubkey: keeperAuthorization, isSigner: false, isWritable: false },
+      { pubkey: approvedMarket, isSigner: false, isWritable: false },
+      { pubkey: syntheticOrderAccount, isSigner: false, isWritable: false },
+      { pubkey: vaultAuthority, isSigner: false, isWritable: false },
+      { pubkey: FILL_RECONCILE_OUTCOME_MINT, isSigner: false, isWritable: false },
+      { pubkey: outcomeAta, isSigner: false, isWritable: false },
+      { pubkey: pendingOrder, isSigner: false, isWritable: true },
+      { pubkey: marketExposure, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_2022_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("reconcile_dflow_fill"),
+  });
+
+  const reconcileSignature = await sendInstructions(connection, payer, reconcileIx);
+  const reconcileTx = await connection.getTransaction(reconcileSignature, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  });
+  const reconcileCu = requireRpcMetric(
+    reconcileTx?.meta?.computeUnitsConsumed,
+    "dflow_fill_reconcile.computeUnitsConsumed",
+  );
+  if (reconcileCu > FILL_RECONCILE_CU_BUDGET) {
+    throw new Error(
+      `DFlow fill reconciliation CU regression: ${reconcileCu} > ${FILL_RECONCILE_CU_BUDGET}`,
+    );
+  }
+
+  const [pendingInfo, exposureInfo] = await Promise.all([
+    connection.getAccountInfo(pendingOrder),
+    connection.getAccountInfo(marketExposure),
+  ]);
+  if (pendingInfo !== null) {
+    throw new Error("PendingDflowOrder was not closed after reconciliation");
+  }
+  if (!exposureInfo) {
+    throw new Error("MarketExposure was not created by reconciliation");
+  }
+
+  const exposureCostBasis = exposureInfo.data.readBigUInt64LE(72);
+  const exposureOutcomeAtoms = exposureInfo.data.readBigUInt64LE(80);
+  if (exposureCostBasis !== reconcileCostBasis) {
+    throw new Error(
+      `unexpected reconciled cost basis: ${exposureCostBasis} != ${reconcileCostBasis}`,
+    );
+  }
+  if (exposureOutcomeAtoms !== reconcileQuotedOutcome) {
+    throw new Error(
+      `unexpected reconciled outcome amount: ${exposureOutcomeAtoms} != ${reconcileQuotedOutcome}`,
+    );
+  }
+
   console.log(JSON.stringify({
     rpc: RPC_URL,
     pactumProgram: PROGRAM_ID.toBase58(),
@@ -346,6 +573,15 @@ async function main() {
       expectedInnerFailure: Boolean(openProbeSim.value.err),
       computeUnits: openProbeCu,
       cuBudget: DFLOW_OPEN_PROBE_CU_BUDGET,
+    },
+    dflowFillReconciliation: {
+      outcomeAta: outcomeAta.toBase58(),
+      pendingClosed: pendingInfo === null,
+      marketExposure: marketExposure.toBase58(),
+      costBasisUsdc: exposureCostBasis.toString(),
+      outcomeAtoms: exposureOutcomeAtoms.toString(),
+      computeUnits: reconcileCu,
+      cuBudget: FILL_RECONCILE_CU_BUDGET,
     },
   }, null, 2));
 }
