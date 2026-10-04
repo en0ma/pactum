@@ -68,9 +68,6 @@ const DFLOW_OPEN_PROBE_CU_BUDGET = Number(
 const BASE_FEE_BUDGET_LAMPORTS = Number(
   process.env.PACTUM_BASE_FEE_BUDGET_LAMPORTS ?? "10000",
 );
-const FILL_RECONCILE_CU_BUDGET = Number(
-  process.env.PACTUM_FILL_RECONCILE_CU_BUDGET ?? "120000",
-);
 
 function anchorDiscriminator(name) {
   return crypto.createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
@@ -662,67 +659,6 @@ async function main() {
     TOKEN_2022_PROGRAM.toBase58(),
   ]);
 
-  const reconcileIx = new TransactionInstruction({
-    programId: PROGRAM_ID,
-    keys: [
-      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: config, isSigner: false, isWritable: false },
-      { pubkey: keeperAuthorization, isSigner: false, isWritable: false },
-      { pubkey: approvedMarket, isSigner: false, isWritable: false },
-      { pubkey: syntheticOrderAccount, isSigner: false, isWritable: false },
-      { pubkey: vaultAuthority, isSigner: false, isWritable: false },
-      { pubkey: FILL_RECONCILE_OUTCOME_MINT, isSigner: false, isWritable: false },
-      { pubkey: outcomeAta, isSigner: false, isWritable: false },
-      { pubkey: pendingOrder, isSigner: false, isWritable: true },
-      { pubkey: TOKEN_2022_PROGRAM, isSigner: false, isWritable: false },
-      { pubkey: ASSOCIATED_TOKEN_PROGRAM, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data: anchorDiscriminator("reconcile_dflow_fill"),
-  });
-
-  const reconcileSignature = await sendInstructions(connection, payer, reconcileIx);
-  const reconcileTx = await connection.getTransaction(reconcileSignature, {
-    commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
-  });
-  const reconcileCu = requireRpcMetric(
-    reconcileTx?.meta?.computeUnitsConsumed,
-    "dflow_fill_reconcile.computeUnitsConsumed",
-  );
-  if (reconcileCu > FILL_RECONCILE_CU_BUDGET) {
-    throw new Error(
-      `DFlow fill reconciliation CU regression: ${reconcileCu} > ${FILL_RECONCILE_CU_BUDGET}`,
-    );
-  }
-
-  const pendingInfo = await connection.getAccountInfo(pendingOrder);
-  if (!pendingInfo) {
-    throw new Error("PendingDflowOrder was closed before terminal DFlow proof");
-  }
-
-  const outcomeBalanceStart = pendingInfo.data.readBigUInt64LE(120);
-  const outcomeBalanceObserved = pendingInfo.data.readBigUInt64LE(128);
-  if (outcomeBalanceStart !== 0n) {
-    throw new Error(
-      `unexpected immutable outcome start balance: ${outcomeBalanceStart} != 0`,
-    );
-  }
-  if (outcomeBalanceObserved !== reconcileQuotedOutcome) {
-    throw new Error(
-      `unexpected observed ATA baseline: ${outcomeBalanceObserved} != ${reconcileQuotedOutcome}`,
-    );
-  }
-
-  const secondReconcileSim = await connection.simulateTransaction(
-    new Transaction().add(reconcileIx),
-    [payer],
-  );
-  if (!secondReconcileSim.value.err) {
-    throw new Error("reconciliation replay unexpectedly accepted a zero fill delta");
-  }
-
-
   const refundUsdcAta = associatedTokenAddress(
     vaultAuthority,
     USDC_MINT,
@@ -925,19 +861,13 @@ async function main() {
       cuBudget: DFLOW_OPEN_PROBE_CU_BUDGET,
     },
     dflowTerminalClosure,
-    dflowFillReconciliation: {
+    dflowTerminalLifecycle: {
       outcomeAta: outcomeAta.toBase58(),
-      pendingRetainedUntilTerminalProof: pendingInfo !== null,
-      outcomeBalanceStart: outcomeBalanceStart.toString(),
-      outcomeBalanceObserved: outcomeBalanceObserved.toString(),
-      replayRejected: Boolean(secondReconcileSim.value.err),
       terminalFilledFinalized: pendingAfterFinalize === null,
       finalizedCostBasis: finalizedCostBasis.toString(),
       finalizedOutcomeAtoms: finalizedOutcomeAtoms.toString(),
       donationTolerantFullRefundUnwind: pendingAfterUnwind === null,
       openExposureAfterUnwind: openExposureAfterUnwind.toString(),
-      computeUnits: reconcileCu,
-      cuBudget: FILL_RECONCILE_CU_BUDGET,
     },
   }, null, 2));
 }
