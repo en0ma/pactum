@@ -193,8 +193,7 @@ pub fn minimum_outcome_for_consumed_input(
         .checked_mul(u128::from(BPS_DENOMINATOR))
         .ok_or(PactumError::MathOverflow)?;
 
-    u64::try_from(numerator / denominator)
-        .map_err(|_| error!(PactumError::MathOverflow))
+    u64::try_from(numerator / denominator).map_err(|_| error!(PactumError::MathOverflow))
 }
 
 pub fn validate_open_order_data(
@@ -414,9 +413,7 @@ mod tests {
             minimum_outcome_for_consumed_input(11_000_000, 948_096, 0, 50).unwrap(),
             0
         );
-        assert!(
-            minimum_outcome_for_consumed_input(11_000_000, 948_096, 948_097, 50).is_err()
-        );
+        assert!(minimum_outcome_for_consumed_input(11_000_000, 948_096, 948_097, 50).is_err());
     }
 
     #[test]
