@@ -9,12 +9,10 @@ pub const DFLOW_PREDICTION_MARKETS: Pubkey =
     pubkey!("pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb");
 
 /// DFlow router/orchestrator program observed on Solana mainnet.
-pub const DFLOW_ROUTER: Pubkey =
-    pubkey!("DF1ow4tspfHX9JwWJsAb9epbkA8hmpSEAtxXy1V27QBH");
+pub const DFLOW_ROUTER: Pubkey = pubkey!("DF1ow4tspfHX9JwWJsAb9epbkA8hmpSEAtxXy1V27QBH");
 
 /// Pactum v1 intentionally supports only the USDC prediction-market rail.
-pub const USDC_MINT: Pubkey =
-    pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+pub const USDC_MINT: Pubkey = pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 
 /// CI-only payload deliberately rejected by DFlow. The fork test uses it to
 /// prove that Pactum can CPI into the real mainnet prediction-market program.
