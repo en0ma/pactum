@@ -99,7 +99,6 @@ pub fn validate_open_order_keys(
     market: &ApprovedMarket,
     vault_usdc: Pubkey,
     vault_authority: Pubkey,
-    usdc_mint: Pubkey,
 ) -> Result<()> {
     require!(market.enabled, PactumError::MarketDisabled);
     require_keys_eq!(
@@ -114,7 +113,7 @@ pub fn validate_open_order_keys(
     );
     require_keys_eq!(
         keys.usdc_mint,
-        usdc_mint,
+        super::USDC_MINT,
         PactumError::InvalidDflowAccounts
     );
     require_keys_eq!(
@@ -146,7 +145,6 @@ pub fn validate_redeem_keys(
     side: OutcomeSide,
     vault_usdc: Pubkey,
     vault_authority: Pubkey,
-    usdc_mint: Pubkey,
 ) -> Result<()> {
     require!(market.enabled, PactumError::MarketDisabled);
     require_keys_eq!(
@@ -171,7 +169,7 @@ pub fn validate_redeem_keys(
     );
     require_keys_eq!(
         keys.usdc_mint,
-        usdc_mint,
+        super::USDC_MINT,
         PactumError::InvalidDflowAccounts
     );
     require_keys_eq!(
@@ -290,7 +288,6 @@ mod tests {
             OutcomeSide::Yes,
             vault_usdc,
             vault_authority,
-            usdc_mint,
         )
         .is_err());
     }
@@ -321,7 +318,6 @@ mod tests {
             OutcomeSide::Yes,
             vault_usdc,
             vault_authority,
-            usdc_mint,
         )
         .is_err());
     }
