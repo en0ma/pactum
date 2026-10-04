@@ -94,6 +94,7 @@ jobs:
       MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL || 'https://api.mainnet-beta.solana.com' }}
       PACTUM_NOOP_CU_BUDGET: "12000"
       PACTUM_DFLOW_PROBE_CU_BUDGET: "80000"
+      PACTUM_DFLOW_PDA_PROBE_CU_BUDGET: "80000"
       PACTUM_BASE_FEE_BUDGET_LAMPORTS: "10000"
 
     steps:
