@@ -1,0 +1,17 @@
+[toolchain]
+anchor_version = "1.1.2"
+solana_version = "3.1.10"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+pactum_vault = "AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "npm run test:fork"
