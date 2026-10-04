@@ -159,12 +159,10 @@ pub fn minimum_outcome_atoms(quoted_outcome_atoms: u64, slippage_bps: u16) -> Re
         PactumError::InvalidSlippage
     );
 
-    Ok(
-        quoted_outcome_atoms
-            .checked_mul(BPS_DENOMINATOR - u64::from(slippage_bps))
-            .ok_or(PactumError::MathOverflow)?
-            / BPS_DENOMINATOR,
-    )
+    Ok(quoted_outcome_atoms
+        .checked_mul(BPS_DENOMINATOR - u64::from(slippage_bps))
+        .ok_or(PactumError::MathOverflow)?
+        / BPS_DENOMINATOR)
 }
 
 pub fn minimum_outcome_for_consumed_input(
@@ -185,9 +183,7 @@ pub fn minimum_outcome_for_consumed_input(
 
     let numerator = u128::from(quoted_outcome_atoms)
         .checked_mul(u128::from(consumed_input_atoms))
-        .and_then(|value| {
-            value.checked_mul(u128::from(BPS_DENOMINATOR - u64::from(slippage_bps)))
-        })
+        .and_then(|value| value.checked_mul(u128::from(BPS_DENOMINATOR - u64::from(slippage_bps))))
         .ok_or(PactumError::MathOverflow)?;
     let denominator = u128::from(quoted_input_atoms)
         .checked_mul(u128::from(BPS_DENOMINATOR))
