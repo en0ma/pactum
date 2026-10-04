@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
 use solana_pubkey::pubkey;
 
+pub mod prediction_v1;
+
 /// DFlow prediction-market program observed on Solana mainnet.
 ///
 /// Raw prediction-market ABIs are isolated here because instruction layouts are
