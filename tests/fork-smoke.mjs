@@ -160,24 +160,35 @@ async function jsonRpcBatch(url, calls) {
     method: call.method,
     params: call.params,
   }));
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const body = await response.json();
-  if (!Array.isArray(body)) {
-    throw new Error(`batch RPC returned non-array: ${JSON.stringify(body)}`);
-  }
-  const byId = new Map(body.map((item) => [item.id, item]));
-  return payload.map((item) => {
-    const result = byId.get(item.id);
-    if (!result) throw new Error(`missing batch RPC result for id ${item.id}`);
-    if (result.error) {
-      throw new Error(`batch RPC error: ${JSON.stringify(result.error)}`);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json();
+    if (Array.isArray(body)) {
+      const byId = new Map(body.map((item) => [item.id, item]));
+      return payload.map((item) => {
+        const result = byId.get(item.id);
+        if (!result) throw new Error(`missing batch RPC result for id ${item.id}`);
+        if (result.error) {
+          throw new Error(`batch RPC error: ${JSON.stringify(result.error)}`);
+        }
+        return result.result;
+      });
     }
-    return result.result;
-  });
+  } catch {
+    // Public Solana RPC providers differ on batch support; fall through to
+    // individual calls so the terminal-state proof tests DFlow, not batching.
+  }
+
+  const results = [];
+  for (const call of calls) {
+    results.push(await jsonRpc(url, call.method, call.params));
+  }
+  return results;
 }
 
 function resolvedMessageKeys(tx) {
