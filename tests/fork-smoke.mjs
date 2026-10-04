@@ -371,15 +371,6 @@ async function main() {
     ],
     PROGRAM_ID,
   );
-  const [marketExposure] = PublicKey.findProgramAddressSync(
-    [
-      Buffer.from("exposure"),
-      config.toBuffer(),
-      OPEN_PROBE_MARKET_LEDGER.toBuffer(),
-      FILL_RECONCILE_OUTCOME_MINT.toBuffer(),
-    ],
-    PROGRAM_ID,
-  );
 
   const initializeVaultIx = new TransactionInstruction({
     programId: PROGRAM_ID,
@@ -492,7 +483,6 @@ async function main() {
       { pubkey: FILL_RECONCILE_OUTCOME_MINT, isSigner: false, isWritable: false },
       { pubkey: outcomeAta, isSigner: false, isWritable: false },
       { pubkey: pendingOrder, isSigner: false, isWritable: true },
-      { pubkey: marketExposure, isSigner: false, isWritable: true },
       { pubkey: TOKEN_2022_PROGRAM, isSigner: false, isWritable: false },
       { pubkey: ASSOCIATED_TOKEN_PROGRAM, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -515,28 +505,30 @@ async function main() {
     );
   }
 
-  const [pendingInfo, exposureInfo] = await Promise.all([
-    connection.getAccountInfo(pendingOrder),
-    connection.getAccountInfo(marketExposure),
-  ]);
-  if (pendingInfo !== null) {
-    throw new Error("PendingDflowOrder was not closed after reconciliation");
-  }
-  if (!exposureInfo) {
-    throw new Error("MarketExposure was not created by reconciliation");
+  const pendingInfo = await connection.getAccountInfo(pendingOrder);
+  if (!pendingInfo) {
+    throw new Error("PendingDflowOrder was closed before terminal DFlow proof");
   }
 
-  const exposureCostBasis = exposureInfo.data.readBigUInt64LE(72);
-  const exposureOutcomeAtoms = exposureInfo.data.readBigUInt64LE(80);
-  if (exposureCostBasis !== reconcileCostBasis) {
+  const reconciledBaseline = pendingInfo.data.readBigUInt64LE(120);
+  const cumulativeFilledOutcomeAtoms = pendingInfo.data.readBigUInt64LE(128);
+  if (reconciledBaseline !== reconcileQuotedOutcome) {
     throw new Error(
-      `unexpected reconciled cost basis: ${exposureCostBasis} != ${reconcileCostBasis}`,
+      `unexpected reconciled ATA baseline: ${reconciledBaseline} != ${reconcileQuotedOutcome}`,
     );
   }
-  if (exposureOutcomeAtoms !== reconcileQuotedOutcome) {
+  if (cumulativeFilledOutcomeAtoms !== reconcileQuotedOutcome) {
     throw new Error(
-      `unexpected reconciled outcome amount: ${exposureOutcomeAtoms} != ${reconcileQuotedOutcome}`,
+      `unexpected cumulative fill: ${cumulativeFilledOutcomeAtoms} != ${reconcileQuotedOutcome}`,
     );
+  }
+
+  const secondReconcileSim = await connection.simulateTransaction(
+    new Transaction().add(reconcileIx),
+    [payer],
+  );
+  if (!secondReconcileSim.value.err) {
+    throw new Error("reconciliation replay unexpectedly accepted a zero fill delta");
   }
 
   console.log(JSON.stringify({
@@ -576,10 +568,10 @@ async function main() {
     },
     dflowFillReconciliation: {
       outcomeAta: outcomeAta.toBase58(),
-      pendingClosed: pendingInfo === null,
-      marketExposure: marketExposure.toBase58(),
-      costBasisUsdc: exposureCostBasis.toString(),
-      outcomeAtoms: exposureOutcomeAtoms.toString(),
+      pendingRetainedUntilTerminalProof: pendingInfo !== null,
+      reconciledAtaBaseline: reconciledBaseline.toString(),
+      cumulativeFilledOutcomeAtoms: cumulativeFilledOutcomeAtoms.toString(),
+      replayRejected: Boolean(secondReconcileSim.value.err),
       computeUnits: reconcileCu,
       cuBudget: FILL_RECONCILE_CU_BUDGET,
     },
