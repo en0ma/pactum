@@ -175,19 +175,7 @@ async function jsonRpc(url, method, params, maxAttempts = 5) {
   throw new Error(`${method} failed without a response`);
 }
 
-async function mainnetAccount(pubkey) {
-  const result = await jsonRpc(MAINNET_RPC_URL, "getAccountInfo", [
-    pubkey.toBase58(),
-    { encoding: "base64", commitment: "confirmed" },
-  ]);
-  if (!result?.value) {
-    throw new Error(`mainnet account not found: ${pubkey.toBase58()}`);
-  }
-  return result.value;
-}
-
-async function cloneMainnetAccountToSurfpool(pubkey) {
-  const account = await mainnetAccount(pubkey);
+async function cloneAccountValueToSurfpool(pubkey, account) {
   const [base64Data] = account.data;
   await surfpoolRpc("surfnet_setAccount", [
     pubkey.toBase58(),
@@ -199,15 +187,22 @@ async function cloneMainnetAccountToSurfpool(pubkey) {
       rentEpoch: account.rentEpoch,
     },
   ]);
-  return account;
 }
 
 async function probeDflowRegistryFixture() {
-  const [ledger, yesMint, noMint] = await Promise.all([
-    mainnetAccount(OPEN_PROBE_MARKET_LEDGER),
-    mainnetAccount(OPEN_PROBE_YES_MINT),
-    mainnetAccount(OPEN_PROBE_NO_MINT),
+  const keys = [
+    OPEN_PROBE_MARKET_LEDGER,
+    OPEN_PROBE_YES_MINT,
+    OPEN_PROBE_NO_MINT,
+  ];
+  const accountResult = await jsonRpc(MAINNET_RPC_URL, "getMultipleAccounts", [
+    keys.map((key) => key.toBase58()),
+    { encoding: "base64", commitment: "confirmed" },
   ]);
+  const [ledger, yesMint, noMint] = accountResult?.value ?? [];
+  if (!ledger || !yesMint || !noMint) {
+    throw new Error("DFlow registry fixture account is missing on mainnet");
+  }
 
   if (ledger.owner !== DFLOW_PM.toBase58()) {
     throw new Error(
@@ -219,9 +214,7 @@ async function probeDflowRegistryFixture() {
     ["no", noMint],
   ]) {
     if (mint.owner !== TOKEN_2022_PROGRAM.toBase58()) {
-      throw new Error(
-        `DFlow ${label} mint is not Token-2022: ${mint.owner}`,
-      );
+      throw new Error(`DFlow ${label} mint is not Token-2022: ${mint.owner}`);
     }
   }
 
@@ -231,14 +224,10 @@ async function probeDflowRegistryFixture() {
     [
       OPEN_PROBE_MARKET_LEDGER.toBase58(),
       { mint: USDC_MINT.toBase58() },
-      { encoding: "jsonParsed", commitment: "confirmed" },
+      { encoding: "base64", commitment: "confirmed" },
     ],
   );
   const candidates = tokenAccounts?.value ?? [];
-  if (candidates.length === 0) {
-    throw new Error("DFlow market ledger has no USDC token account");
-  }
-
   const captured = candidates.find((item) => item.pubkey.startsWith("BFH59"));
   if (!captured) {
     throw new Error(
@@ -250,19 +239,25 @@ async function probeDflowRegistryFixture() {
   if (captured.account.owner !== SPL_TOKEN_PROGRAM.toBase58()) {
     throw new Error("DFlow market USDC account is not owned by SPL Token");
   }
-  const info = captured.account.data?.parsed?.info;
+
+  const [tokenDataBase64] = captured.account.data;
+  const tokenData = Buffer.from(tokenDataBase64, "base64");
   if (
-    info?.mint !== USDC_MINT.toBase58() ||
-    info?.owner !== OPEN_PROBE_MARKET_LEDGER.toBase58()
+    !tokenData.subarray(0, 32).equals(USDC_MINT.toBuffer()) ||
+    !tokenData.subarray(32, 64).equals(OPEN_PROBE_MARKET_LEDGER.toBuffer())
   ) {
     throw new Error("DFlow market USDC account mint/authority relationship changed");
   }
 
   return {
     marketLedger: OPEN_PROBE_MARKET_LEDGER,
+    marketLedgerAccount: ledger,
     marketUsdc: new PublicKey(captured.pubkey),
+    marketUsdcAccount: captured.account,
     yesMint: OPEN_PROBE_YES_MINT,
+    yesMintAccount: yesMint,
     noMint: OPEN_PROBE_NO_MINT,
+    noMintAccount: noMint,
     ledgerDataLength: Buffer.from(ledger.data[0], "base64").length,
   };
 }
@@ -525,11 +520,22 @@ async function main() {
 
   const dflowRegistry = await probeDflowRegistryFixture();
   await Promise.all([
-    cloneMainnetAccountToSurfpool(dflowRegistry.marketLedger),
-    cloneMainnetAccountToSurfpool(dflowRegistry.marketUsdc),
-    cloneMainnetAccountToSurfpool(dflowRegistry.yesMint),
-    cloneMainnetAccountToSurfpool(dflowRegistry.noMint),
-    cloneMainnetAccountToSurfpool(DFLOW_EVENT_AUTHORITY),
+    cloneAccountValueToSurfpool(
+      dflowRegistry.marketLedger,
+      dflowRegistry.marketLedgerAccount,
+    ),
+    cloneAccountValueToSurfpool(
+      dflowRegistry.marketUsdc,
+      dflowRegistry.marketUsdcAccount,
+    ),
+    cloneAccountValueToSurfpool(
+      dflowRegistry.yesMint,
+      dflowRegistry.yesMintAccount,
+    ),
+    cloneAccountValueToSurfpool(
+      dflowRegistry.noMint,
+      dflowRegistry.noMintAccount,
+    ),
   ]);
   const openProbeMarketUsdc = dflowRegistry.marketUsdc;
 
