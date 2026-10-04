@@ -308,10 +308,10 @@ pub mod pactum_vault {
                 && ctx.accounts.market_exposure.outcome_atoms > 0,
             PactumError::InvalidMarketExposure
         );
-        require!(
-            ctx.accounts.outcome_account.amount >= ctx.accounts.market_exposure.outcome_atoms,
-            PactumError::InvalidMarketExposure
-        );
+        math::validate_redeem_position(
+            ctx.accounts.market_exposure.outcome_atoms,
+            ctx.accounts.outcome_account.amount,
+        )?;
         require!(
             ctx.accounts.outcome_mint.decimals == ctx.accounts.usdc_mint.decimals,
             PactumError::InvalidDflowAccounts
@@ -376,10 +376,7 @@ pub mod pactum_vault {
             .amount
             .checked_sub(usdc_before)
             .ok_or(PactumError::MathOverflow)?;
-        require!(
-            payout == 0 || payout == outcome_before,
-            PactumError::InvalidRedemptionPayout
-        );
+        math::validate_terminal_redemption_payout(outcome_before, payout)?;
 
         let closed_cost_basis = ctx.accounts.market_exposure.cost_basis_usdc;
         ctx.accounts.config.open_exposure_usdc = ctx
@@ -417,6 +414,7 @@ pub mod pactum_vault {
         cost_basis_usdc: u64,
         outcome_atoms: u64,
     ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
         require!(cost_basis_usdc > 0 && outcome_atoms > 0, PactumError::ZeroAmount);
         math::validate_trade_amount(
             cost_basis_usdc,
