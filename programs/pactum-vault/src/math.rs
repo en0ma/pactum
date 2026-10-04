@@ -56,7 +56,10 @@ pub fn validate_redeem_position(tracked_outcome_atoms: u64, account_balance: u64
     Ok(())
 }
 
-pub fn validate_terminal_redemption_payout(redeemed_outcome_atoms: u64, payout_usdc: u64) -> Result<()> {
+pub fn validate_terminal_redemption_payout(
+    redeemed_outcome_atoms: u64,
+    payout_usdc: u64,
+) -> Result<()> {
     require!(
         redeemed_outcome_atoms > 0 && (payout_usdc == 0 || payout_usdc == redeemed_outcome_atoms),
         PactumError::InvalidRedemptionPayout
