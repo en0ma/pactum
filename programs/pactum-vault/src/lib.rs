@@ -6,7 +6,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 #[cfg(feature = "test-hooks")]
 use solana_cpi::invoke;
 #[cfg(feature = "test-hooks")]
-use solana_instruction::Instruction;
+use solana_instruction::{AccountMeta, Instruction};
 
 pub mod dflow;
 pub mod error;
@@ -291,6 +291,33 @@ pub mod pactum_vault {
 
         invoke(&ix, &[ctx.accounts.dflow_program.to_account_info()]).map_err(Into::into)
     }
+
+    /// CI-only proof that Solana accepts a Pactum PDA as an inner DFlow signer.
+    /// DFlow is expected to reject the deliberately invalid payload after entry.
+    #[cfg(feature = "test-hooks")]
+    pub fn probe_dflow_pda_signed_cpi(ctx: Context<ProbeDflowPdaSignedCpi>) -> Result<()> {
+        let ix = Instruction {
+            program_id: dflow::DFLOW_PREDICTION_MARKETS,
+            accounts: vec![AccountMeta::new_readonly(
+                ctx.accounts.probe_authority.key(),
+                true,
+            )],
+            data: dflow::DFLOW_CPI_PROBE_DATA.to_vec(),
+        };
+
+        let bump = [ctx.bumps.probe_authority];
+        let seeds: &[&[u8]] = &[b"dflow_cpi_probe", &bump];
+
+        solana_cpi::invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.probe_authority.to_account_info(),
+                ctx.accounts.dflow_program.to_account_info(),
+            ],
+            &[seeds],
+        )
+        .map_err(Into::into)
+    }
 }
 
 #[derive(Accounts)]
@@ -544,6 +571,18 @@ pub struct BenchmarkNoop {}
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
 pub struct ProbeDflowPredictionCpi<'info> {
+    /// CHECK: pinned to the known DFlow prediction-market program.
+    #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
+    pub dflow_program: UncheckedAccount<'info>,
+}
+
+#[cfg(feature = "test-hooks")]
+#[derive(Accounts)]
+pub struct ProbeDflowPdaSignedCpi<'info> {
+    /// CHECK: deterministic CI-only PDA; it need not hold data or lamports.
+    #[account(seeds = [b"dflow_cpi_probe"], bump)]
+    pub probe_authority: UncheckedAccount<'info>,
+
     /// CHECK: pinned to the known DFlow prediction-market program.
     #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
     pub dflow_program: UncheckedAccount<'info>,
