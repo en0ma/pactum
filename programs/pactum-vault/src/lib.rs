@@ -526,7 +526,7 @@ pub mod pactum_vault {
 
         token::approve(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Approve {
                     to: ctx.accounts.vault_usdc.to_account_info(),
                     delegate: ctx.accounts.keeper.to_account_info(),
@@ -1157,7 +1157,7 @@ pub mod pactum_vault {
 
         token::approve(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Approve {
                     to: ctx.accounts.source_usdc.to_account_info(),
                     delegate: ctx.accounts.keeper.to_account_info(),
