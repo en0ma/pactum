@@ -196,13 +196,14 @@ async function probeDflowRegistryFixture() {
     OPEN_PROBE_MARKET_LEDGER,
     OPEN_PROBE_YES_MINT,
     OPEN_PROBE_NO_MINT,
+    USDC_MINT,
   ];
   const accountResult = await jsonRpc(MAINNET_RPC_URL, "getMultipleAccounts", [
     keys.map((key) => key.toBase58()),
     { encoding: "base64", commitment: "confirmed" },
   ]);
-  const [ledger, yesMint, noMint] = accountResult?.value ?? [];
-  if (!ledger || !yesMint || !noMint) {
+  const [ledger, yesMint, noMint, usdcMint] = accountResult?.value ?? [];
+  if (!ledger || !yesMint || !noMint || !usdcMint) {
     throw new Error("DFlow registry fixture account is missing on mainnet");
   }
 
@@ -218,6 +219,9 @@ async function probeDflowRegistryFixture() {
     if (mint.owner !== TOKEN_2022_PROGRAM.toBase58()) {
       throw new Error(`DFlow ${label} mint is not Token-2022: ${mint.owner}`);
     }
+  }
+  if (usdcMint.owner !== SPL_TOKEN_PROGRAM.toBase58()) {
+    throw new Error(`USDC mint is not owned by SPL Token: ${usdcMint.owner}`);
   }
 
   const tokenAccounts = await jsonRpc(
@@ -263,6 +267,7 @@ async function probeDflowRegistryFixture() {
     yesMintAccount: yesMint,
     noMint: OPEN_PROBE_NO_MINT,
     noMintAccount: noMint,
+    usdcMintAccount: usdcMint,
     ledgerDataLength: ledgerData.length,
     ledgerYesMintOffsets: findByteOffsets(
       ledgerData,
@@ -653,6 +658,10 @@ async function main() {
       dflowRegistry.noMint,
       dflowRegistry.noMintAccount,
     ),
+    cloneAccountValueToSurfpool(
+      USDC_MINT,
+      dflowRegistry.usdcMintAccount,
+    ),
   ]);
   const openProbeMarketUsdc = dflowRegistry.marketUsdc;
 
@@ -733,6 +742,69 @@ async function main() {
     );
   }
 
+  const delegatedOrderAccount = Keypair.generate().publicKey;
+  const delegatedOpenProbeIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: false },
+      { pubkey: openProbeAuthority, isSigner: false, isWritable: false },
+      { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+      { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: true },
+      { pubkey: openProbeMarketUsdc, isSigner: false, isWritable: true },
+      { pubkey: delegatedOrderAccount, isSigner: false, isWritable: true },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: openProbeSourceUsdc, isSigner: false, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("probe_dflow_open_order_keeper_delegate"),
+      OPEN_ORDER_FIXTURE,
+      u64Le(948_096),
+    ]),
+  });
+
+  const { blockhash: delegatedProbeBlockhash } =
+    await connection.getLatestBlockhash();
+  const delegatedProbeTx = new Transaction({
+    feePayer: payer.publicKey,
+    recentBlockhash: delegatedProbeBlockhash,
+  }).add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
+    SystemProgram.transfer({
+      fromPubkey: payer.publicKey,
+      toPubkey: delegatedOrderAccount,
+      lamports: 1,
+    }),
+    delegatedOpenProbeIx,
+  );
+  delegatedProbeTx.sign(payer);
+
+  const delegatedProbeSim = await connection.simulateTransaction(
+    delegatedProbeTx,
+  );
+  const delegatedProbeLogs = delegatedProbeSim.value.logs ?? [];
+  const delegatedProbeReachedDflow = delegatedProbeLogs.some((line) =>
+    line.includes(`Program ${DFLOW_PM.toBase58()} invoke [2]`),
+  );
+  const delegatedProbeApproved = delegatedProbeLogs.some((line) =>
+    line.includes("Instruction: Approve"),
+  );
+  const delegatedProbeSignerEscalation = delegatedProbeLogs.some((line) =>
+    line.toLowerCase().includes("signer privilege escalated"),
+  );
+
+  if (
+    !delegatedProbeReachedDflow ||
+    !delegatedProbeApproved ||
+    delegatedProbeSignerEscalation
+  ) {
+    console.error(delegatedProbeLogs.join("\n"));
+    throw new Error(
+      "Keeper-delegated OpenUserOrder probe did not reach DFlow with an exact SPL delegate allowance",
+    );
+  }
 
   const [config] = PublicKey.findProgramAddressSync(
     [Buffer.from("config")],
