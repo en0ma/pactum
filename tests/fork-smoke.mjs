@@ -435,14 +435,6 @@ function dflowReferencedIndexes(tx, keys) {
 }
 
 async function probeDflowTerminalAccountClosure() {
-  const signatures = await jsonRpc(MAINNET_RPC_URL, "getSignaturesForAddress", [
-    DFLOW_PM.toBase58(),
-    { limit: 20 },
-  ]);
-  const candidates = signatures
-    .filter((entry) => entry.err === null)
-    .slice(0, 16);
-
   const rent344 = await jsonRpc(
     MAINNET_RPC_URL,
     "getMinimumBalanceForRentExemption",
@@ -450,42 +442,64 @@ async function probeDflowTerminalAccountClosure() {
   );
 
   const evidence = [];
-  for (let i = 0; i < candidates.length; i += 1) {
-    const tx = await jsonRpc(MAINNET_RPC_URL, "getTransaction", [
-      candidates[i].signature,
-      { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 },
-    ]);
-    if (!tx?.meta || tx.meta.err) {
-      await sleep(250);
-      continue;
-    }
-    const keys = resolvedMessageKeys(tx);
-    const terminalType = terminalDflowEventType(tx, keys);
-    if (terminalType === null) continue;
+  let before;
+  let scanned = 0;
+  const maxSignatures = 400;
 
-    const referenced = dflowReferencedIndexes(tx, keys);
-    const closedOrderCandidates = [];
-    for (const index of referenced) {
-      const pre = tx.meta.preBalances?.[index] ?? 0;
-      const post = tx.meta.postBalances?.[index] ?? 0;
-      if (pre === rent344 && post === 0) {
-        closedOrderCandidates.push(keys[index]);
+  while (scanned < maxSignatures && evidence.length < 2) {
+    const options = { limit: Math.min(100, maxSignatures - scanned) };
+    if (before) options.before = before;
+
+    const signatures = await jsonRpc(
+      MAINNET_RPC_URL,
+      "getSignaturesForAddress",
+      [DFLOW_PM.toBase58(), options],
+    );
+    if (!signatures?.length) break;
+
+    scanned += signatures.length;
+    before = signatures[signatures.length - 1].signature;
+
+    for (const entry of signatures) {
+      if (entry.err !== null) continue;
+
+      const tx = await jsonRpc(MAINNET_RPC_URL, "getTransaction", [
+        entry.signature,
+        { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+      ]);
+      if (!tx?.meta || tx.meta.err) {
+        await sleep(100);
+        continue;
       }
+
+      const keys = resolvedMessageKeys(tx);
+      const terminalType = terminalDflowEventType(tx, keys);
+      if (terminalType === null) continue;
+
+      const referenced = dflowReferencedIndexes(tx, keys);
+      const closedOrderCandidates = [];
+      for (const index of referenced) {
+        const pre = tx.meta.preBalances?.[index] ?? 0;
+        const post = tx.meta.postBalances?.[index] ?? 0;
+        if (pre === rent344 && post === 0) {
+          closedOrderCandidates.push(keys[index]);
+        }
+      }
+
+      evidence.push({
+        signature: entry.signature,
+        terminalType: terminalType === 0x03 ? "cancel" : "revert",
+        closedOrderCandidates,
+      });
+
+      if (evidence.length >= 2) break;
+      await sleep(100);
     }
-
-    evidence.push({
-      signature: candidates[i].signature,
-      terminalType: terminalType === 0x03 ? "cancel" : "revert",
-      closedOrderCandidates,
-    });
-
-    if (evidence.length >= 2) break;
-    await sleep(250);
   }
 
   if (evidence.length === 0) {
     throw new Error(
-      "No recent DFlow Cancel/Revert events found; cannot establish terminal account-closure proof",
+      `No DFlow Cancel/Revert events found after scanning ${scanned} recent program signatures`,
     );
   }
   for (const item of evidence) {
@@ -496,7 +510,7 @@ async function probeDflowTerminalAccountClosure() {
     }
   }
 
-  return { rent344, evidence };
+  return { rent344, scannedSignatures: scanned, evidence };
 }
 
 async function main() {
@@ -1102,6 +1116,10 @@ async function main() {
   }
 
   const dflowUserOrderLayout = await probeDflowUserOrderLayout();
+  console.log(
+    "DFlow user-order layout probe:",
+    JSON.stringify(dflowUserOrderLayout, null, 2),
+  );
   const dflowTerminalClosure = await probeDflowTerminalAccountClosure();
 
   console.log(JSON.stringify({
