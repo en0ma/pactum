@@ -51,6 +51,44 @@ impl KeeperAuthorization {
     pub const LEN: usize = 32 + 1;
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RegistryMarket {
+    pub market_ledger: Pubkey,
+    pub settlement_vault: Pubkey,
+    pub yes_mint: Pubkey,
+    pub no_mint: Pubkey,
+    pub start_ts: i64,
+    pub end_ts: i64,
+}
+
+impl RegistryMarket {
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 8 + 8;
+}
+
+#[account]
+pub struct MarketKeeperAuthorization {
+    pub keeper: Pubkey,
+    pub bump: u8,
+}
+
+impl MarketKeeperAuthorization {
+    pub const LEN: usize = 32 + 1;
+}
+
+#[account]
+pub struct MarketRegistry {
+    pub previous: RegistryMarket,
+    pub current: RegistryMarket,
+    pub next: RegistryMarket,
+    pub sequence: u64,
+    pub observed_slot: u64,
+    pub bump: u8,
+}
+
+impl MarketRegistry {
+    pub const LEN: usize = RegistryMarket::LEN * 3 + 8 + 8 + 1;
+}
+
 #[account]
 pub struct ApprovedMarket {
     pub market_ledger: Pubkey,
