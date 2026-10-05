@@ -17,8 +17,8 @@ pub mod state;
 
 use error::PactumError;
 use state::{
-    ApprovedMarket, KeeperAuthorization, MarketExposure, MarketKeeperAuthorization,
-    MarketRegistry, PendingDflowOrder, RegistryMarket, UserPosition, VaultConfig,
+    ApprovedMarket, KeeperAuthorization, MarketExposure, MarketKeeperAuthorization, MarketRegistry,
+    PendingDflowOrder, RegistryMarket, UserPosition, VaultConfig,
 };
 
 declare_id!("AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw");
@@ -152,16 +152,28 @@ pub mod pactum_vault {
         sequence: u64,
         observed_slot: u64,
     ) -> Result<()> {
-        require!(previous.start_ts < previous.end_ts, PactumError::InvalidMarketRegistry);
-        require!(current.start_ts < current.end_ts, PactumError::InvalidMarketRegistry);
-        require!(next.start_ts < next.end_ts, PactumError::InvalidMarketRegistry);
+        require!(
+            previous.start_ts < previous.end_ts,
+            PactumError::InvalidMarketRegistry
+        );
+        require!(
+            current.start_ts < current.end_ts,
+            PactumError::InvalidMarketRegistry
+        );
+        require!(
+            next.start_ts < next.end_ts,
+            PactumError::InvalidMarketRegistry
+        );
         require!(
             previous.end_ts <= current.start_ts && current.end_ts <= next.start_ts,
             PactumError::InvalidMarketRegistry
         );
 
         let clock = Clock::get()?;
-        require!(observed_slot <= clock.slot, PactumError::InvalidMarketRegistry);
+        require!(
+            observed_slot <= clock.slot,
+            PactumError::InvalidMarketRegistry
+        );
         require!(
             current.start_ts <= clock.unix_timestamp && clock.unix_timestamp < current.end_ts,
             PactumError::MarketRegistryStale
