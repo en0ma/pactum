@@ -292,6 +292,124 @@ function terminalDflowEventType(tx, keys) {
   return null;
 }
 
+function parseDflowUserOrderEvent(data) {
+  if (
+    data.length < 162 ||
+    data[0] !== 0xf0 ||
+    !data.subarray(1, 8).every((byte) => byte === 0) ||
+    data[8] !== 0x02
+  ) {
+    return null;
+  }
+
+  return {
+    type: data[9],
+    userOrder: new PublicKey(data.subarray(10, 42)),
+    inputMint: new PublicKey(data.subarray(42, 74)),
+    inputAmount: data.readBigUInt64LE(74),
+    outputMint: new PublicKey(data.subarray(82, 114)),
+    outputAmount: data.readBigUInt64LE(114),
+    feeMint: new PublicKey(data.subarray(122, 154)),
+    feeAmount: data.readBigUInt64LE(154),
+  };
+}
+
+function findByteOffsets(data, needle) {
+  const offsets = [];
+  for (let offset = 0; offset <= data.length - needle.length; offset += 1) {
+    if (data.subarray(offset, offset + needle.length).equals(needle)) {
+      offsets.push(offset);
+    }
+  }
+  return offsets;
+}
+
+function dflowOpenEvents(tx, keys) {
+  const events = [];
+  for (const ix of allCompiledInstructions(tx)) {
+    if (typeof ix.programIdIndex !== "number" || typeof ix.data !== "string") continue;
+    if (keys[ix.programIdIndex] !== DFLOW_PM.toBase58()) continue;
+    const event = parseDflowUserOrderEvent(decodeBase58(ix.data));
+    if (event?.type === 0x01) events.push(event);
+  }
+  return events;
+}
+
+async function probeDflowUserOrderLayout() {
+  const programAccounts = await jsonRpc(MAINNET_RPC_URL, "getProgramAccounts", [
+    DFLOW_PM.toBase58(),
+    {
+      encoding: "base64",
+      commitment: "confirmed",
+      filters: [{ dataSize: 344 }],
+    },
+  ]);
+
+  const samples = [];
+  for (const live of (programAccounts ?? []).slice(0, 8)) {
+    const orderAddress = new PublicKey(live.pubkey);
+    const signatures = await jsonRpc(MAINNET_RPC_URL, "getSignaturesForAddress", [
+      orderAddress.toBase58(),
+      { limit: 8 },
+    ]);
+
+    let matchedEvent = null;
+    let signature = null;
+    for (const entry of signatures ?? []) {
+      if (entry.err) continue;
+      const tx = await jsonRpc(MAINNET_RPC_URL, "getTransaction", [
+        entry.signature,
+        {
+          encoding: "json",
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        },
+      ]);
+      if (!tx?.meta || tx.meta.err) continue;
+      const keys = resolvedMessageKeys(tx);
+      matchedEvent = dflowOpenEvents(tx, keys).find(
+        (event) => event.userOrder.toBase58() === orderAddress.toBase58(),
+      );
+      if (matchedEvent) {
+        signature = entry.signature;
+        break;
+      }
+      await sleep(200);
+    }
+
+    if (!matchedEvent) continue;
+
+    const [base64Data] = live.account.data;
+    const accountData = Buffer.from(base64Data, "base64");
+    samples.push({
+      userOrder: orderAddress.toBase58(),
+      signature,
+      inputMint: matchedEvent.inputMint.toBase58(),
+      outputMint: matchedEvent.outputMint.toBase58(),
+      inputAmount: matchedEvent.inputAmount.toString(),
+      outputAmount: matchedEvent.outputAmount.toString(),
+      inputMintOffsets: findByteOffsets(accountData, matchedEvent.inputMint.toBuffer()),
+      outputMintOffsets: findByteOffsets(accountData, matchedEvent.outputMint.toBuffer()),
+    });
+    if (samples.length >= 3) break;
+  }
+
+  const populated = samples.filter((sample) => sample.outputMintOffsets.length > 0);
+  let stableOutputMintOffset = null;
+  if (populated.length >= 2) {
+    const common = populated[0].outputMintOffsets.filter((offset) =>
+      populated.slice(1).every((sample) => sample.outputMintOffsets.includes(offset)),
+    );
+    if (common.length === 1) stableOutputMintOffset = common[0];
+  }
+
+  return {
+    liveUserOrderCount: programAccounts?.length ?? 0,
+    stableOutputMintOffset,
+    samples,
+  };
+}
+
 function dflowReferencedIndexes(tx, keys) {
   const indexes = new Set();
   for (const ix of allCompiledInstructions(tx)) {
@@ -969,6 +1087,7 @@ async function main() {
     throw new Error("terminal refund was not swept back into vault_usdc");
   }
 
+  const dflowUserOrderLayout = await probeDflowUserOrderLayout();
   const dflowTerminalClosure = await probeDflowTerminalAccountClosure();
 
   console.log(JSON.stringify({
@@ -1013,6 +1132,7 @@ async function main() {
       computeUnits: openProbeCu,
       cuBudget: DFLOW_OPEN_PROBE_CU_BUDGET,
     },
+    dflowUserOrderLayout,
     dflowTerminalClosure,
     dflowTerminalLifecycle: {
       outcomeAta: outcomeAta.toBase58(),
