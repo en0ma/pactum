@@ -291,12 +291,15 @@ async function getTransactionWithRetry(connection, signature) {
 
 async function discoverOrdersFromChain(connection) {
   const orders = new Map();
+  const instructionShapes = {};
+  const instructionExamples = [];
   let before;
   let scannedSignatures = 0;
+  let dflowInstructionCount = 0;
 
   while (
-    orders.size < SAMPLE_LIMIT &&
-    scannedSignatures < PROGRAM_SCAN_LIMIT
+    scannedSignatures < PROGRAM_SCAN_LIMIT &&
+    orders.size < SAMPLE_LIMIT
   ) {
     const signatures = await rpcWithRetry(
       "getSignaturesForAddress DFlow program",
@@ -320,19 +323,47 @@ async function discoverOrdersFromChain(connection) {
       if (!tx) continue;
       const keys = resolvedKeys(tx);
       const dflowIxs = dflowInstructions(tx, keys);
+      const deltas = tokenBalanceDeltas(tx, keys);
+
       for (const ix of dflowIxs) {
+        dflowInstructionCount += 1;
+        const data = ix.dataHex ? Buffer.from(ix.dataHex, "hex") : null;
+        const actionU64 =
+          data && data.length >= 8 ? readU64LE(data, 0)?.toString() : null;
+        const shapeKey = [
+          `len=${data?.length ?? 0}`,
+          `action=${actionU64 ?? "none"}`,
+          `accounts=${ix.accounts.length}`,
+        ].join("|");
+        instructionShapes[shapeKey] = (instructionShapes[shapeKey] ?? 0) + 1;
+
+        if (instructionExamples.length < 100) {
+          instructionExamples.push({
+            signature: item.signature,
+            slot: tx.slot,
+            blockTime: tx.blockTime,
+            dataLength: data?.length ?? null,
+            actionU64,
+            dataHex: ix.dataHex,
+            accounts: ix.accounts,
+            signers: signerKeys(tx),
+            tokenBalanceDeltas: deltas,
+          });
+        }
+
         const open = classifyOpenInstruction(ix);
         if (!open) continue;
 
-        const deltas = tokenBalanceDeltas(tx, keys);
         const sourceDelta = deltas.find(
           (delta) =>
             delta.account === open.sourceUsdc &&
             delta.mint === USDC_MINT &&
             BigInt(delta.delta) < 0n,
         );
-        if (!sourceDelta) continue;
-        if (-BigInt(sourceDelta.delta) !== BigInt(open.inputAmount)) continue;
+
+        const debitMatches =
+          sourceDelta &&
+          -BigInt(sourceDelta.delta) === BigInt(open.inputAmount);
 
         if (!orders.has(open.orderAccount)) {
           orders.set(open.orderAccount, {
@@ -342,6 +373,8 @@ async function discoverOrdersFromChain(connection) {
             openBlockTime: tx.blockTime,
             openSigners: signerKeys(tx),
             inputMint: USDC_MINT,
+            sourceDebitObserved: sourceDelta?.delta ?? null,
+            sourceDebitMatchesEncodedInput: Boolean(debitMatches),
             openTokenBalanceDeltas: deltas,
           });
         }
@@ -358,6 +391,9 @@ async function discoverOrdersFromChain(connection) {
   return {
     candidates: [...orders.values()],
     scannedSignatures,
+    dflowInstructionCount,
+    instructionShapes,
+    instructionExamples,
   };
 }
 
@@ -552,12 +588,6 @@ async function main() {
   console.log(`Using configured mainnet RPC host: ${RPC_HOSTNAME}`);
   const connection = new Connection(MAINNET_RPC_URL, "confirmed");
   const discovery = await discoverOrdersFromChain(connection);
-  if (discovery.candidates.length === 0) {
-    throw new Error(
-      `No DFlow Open UserOrder events found after scanning ${discovery.scannedSignatures} program signatures`,
-    );
-  }
-
   const samples = [];
   for (const seed of discovery.candidates) {
     try {
@@ -584,13 +614,24 @@ async function main() {
       programSignaturePage: PROGRAM_SIGNATURE_PAGE,
       txLimitPerOrder: TX_LIMIT_PER_ORDER,
     },
-    summary: summarize(completeSamples, discovery.scannedSignatures),
+    summary: {
+      ...summarize(completeSamples, discovery.scannedSignatures),
+      discoveredOpenCandidates: discovery.candidates.length,
+      dflowInstructionCount: discovery.dflowInstructionCount,
+      instructionShapes: discovery.instructionShapes,
+    },
+    instructionExamples: discovery.instructionExamples,
     samples,
   };
 
   fs.mkdirSync(new URL("../artifacts/", import.meta.url), { recursive: true });
   fs.writeFileSync(OUTPUT, JSON.stringify(dataset, null, 2) + "\n");
 
+  if (discovery.candidates.length === 0) {
+    console.warn(
+      `No exact OpenUserOrder fingerprint found in ${discovery.scannedSignatures} program signatures; diagnostic instruction evidence was still captured.`,
+    );
+  }
   console.log("DFlow mainnet on-chain evidence summary");
   console.log(JSON.stringify(dataset.summary, null, 2));
   console.log(`dataset=${OUTPUT}`);
