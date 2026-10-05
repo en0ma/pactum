@@ -168,8 +168,17 @@ pub mod pactum_vault {
         );
 
         let registry = &mut ctx.accounts.market_registry;
-        if registry.sequence != 0 {
-            require!(sequence > registry.sequence, PactumError::InvalidMarketRegistry);
+        if registry.sequence == 0 {
+            require!(sequence == 1, PactumError::InvalidMarketRegistry);
+        } else {
+            let expected_sequence = registry
+                .sequence
+                .checked_add(1)
+                .ok_or(PactumError::MathOverflow)?;
+            require!(
+                sequence == expected_sequence,
+                PactumError::InvalidMarketRegistry
+            );
         }
 
         require_keys_eq!(
@@ -201,12 +210,35 @@ pub mod pactum_vault {
         registry.bump = ctx.bumps.market_registry;
 
         let approved = &mut ctx.accounts.current_approved_market;
-        approved.market_ledger = current.market_ledger;
-        approved.settlement_vault = current.settlement_vault;
-        approved.yes_mint = current.yes_mint;
-        approved.no_mint = current.no_mint;
-        approved.enabled = true;
-        approved.bump = ctx.bumps.current_approved_market;
+        if approved.market_ledger == Pubkey::default() {
+            approved.market_ledger = current.market_ledger;
+            approved.settlement_vault = current.settlement_vault;
+            approved.yes_mint = current.yes_mint;
+            approved.no_mint = current.no_mint;
+            approved.enabled = true;
+            approved.bump = ctx.bumps.current_approved_market;
+        } else {
+            require_keys_eq!(
+                approved.market_ledger,
+                current.market_ledger,
+                PactumError::MarketRegistryMismatch
+            );
+            require_keys_eq!(
+                approved.settlement_vault,
+                current.settlement_vault,
+                PactumError::MarketRegistryMismatch
+            );
+            require_keys_eq!(
+                approved.yes_mint,
+                current.yes_mint,
+                PactumError::MarketRegistryMismatch
+            );
+            require_keys_eq!(
+                approved.no_mint,
+                current.no_mint,
+                PactumError::MarketRegistryMismatch
+            );
+        }
 
         emit!(MarketRegistryUpdated {
             sequence,
@@ -1654,7 +1686,7 @@ pub struct ExecuteTrade<'info> {
     #[account(mut)]
     pub order_account: UncheckedAccount<'info>,
 
-    /// CHECK: Pactum PDA that signs DFlow user/authority roles.
+    /// CHECK: Pactum PDA that permanently owns vault custody token accounts.
     #[account(
         seeds = [b"vault_authority"],
         bump = config.vault_authority_bump
