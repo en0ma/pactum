@@ -15,6 +15,9 @@ import { requireRpcMetric } from "./metric-guard.mjs";
 const RPC_URL = process.env.SURFPOOL_RPC_URL ?? "http://127.0.0.1:8899";
 const MAINNET_RPC_URL =
   process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+const DFLOW_METADATA_API_URL =
+  process.env.DFLOW_METADATA_API_URL ??
+  "https://dev-prediction-markets-api.dflow.net";
 const PROGRAM_ID = new PublicKey(
   process.env.PACTUM_PROGRAM_ID ?? "AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw",
 );
@@ -349,63 +352,96 @@ function dflowOpenEvents(tx, keys) {
   return events;
 }
 
-async function probeDflowUserOrderLayout() {
-  const programAccounts = await jsonRpc(MAINNET_RPC_URL, "getProgramAccounts", [
-    DFLOW_PM.toBase58(),
-    {
-      encoding: "base64",
-      commitment: "confirmed",
-      filters: [{ dataSize: 344 }],
-    },
+async function fetchDflowOnchainTrades() {
+  const headers = {};
+  if (process.env.DFLOW_API_KEY) {
+    headers["x-api-key"] = process.env.DFLOW_API_KEY;
+  }
+
+  const response = await fetch(
+    `${DFLOW_METADATA_API_URL}/api/v1/onchain-trades?limit=200`,
+    { headers },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `DFlow onchain-trades request failed: ${response.status} ${await response.text()}`,
+    );
+  }
+
+  const body = await response.json();
+  const trades = body?.trades ?? [];
+  if (!Array.isArray(trades) || trades.length === 0) {
+    throw new Error("DFlow onchain-trades feed returned no trades");
+  }
+  return trades;
+}
+
+function uniqueDflowTradeOrders(trades) {
+  const orders = new Map();
+  for (const trade of trades) {
+    if (
+      typeof trade?.orderAccount !== "string" ||
+      typeof trade?.outputMint !== "string"
+    ) {
+      continue;
+    }
+    if (!orders.has(trade.orderAccount)) {
+      orders.set(trade.orderAccount, trade);
+    }
+  }
+  return [...orders.values()];
+}
+
+async function dflowTradeOrderAccounts(trades) {
+  const orders = uniqueDflowTradeOrders(trades).slice(0, 100);
+  if (orders.length === 0) {
+    throw new Error("DFlow onchain-trades feed had no usable order accounts");
+  }
+
+  const result = await jsonRpc(MAINNET_RPC_URL, "getMultipleAccounts", [
+    orders.map((trade) => trade.orderAccount),
+    { encoding: "base64", commitment: "confirmed" },
   ]);
 
-  const samples = [];
-  for (const live of (programAccounts ?? []).slice(0, 8)) {
-    const orderAddress = new PublicKey(live.pubkey);
-    const signatures = await jsonRpc(MAINNET_RPC_URL, "getSignaturesForAddress", [
-      orderAddress.toBase58(),
-      { limit: 8 },
-    ]);
+  return orders.map((trade, index) => ({
+    trade,
+    account: result?.value?.[index] ?? null,
+  }));
+}
 
-    let matchedEvent = null;
-    let signature = null;
-    for (const entry of signatures ?? []) {
-      if (entry.err) continue;
-      const tx = await jsonRpc(MAINNET_RPC_URL, "getTransaction", [
-        entry.signature,
-        {
-          encoding: "json",
-          commitment: "confirmed",
-          maxSupportedTransactionVersion: 0,
-        },
-      ]);
-      if (!tx?.meta || tx.meta.err) continue;
-      const keys = resolvedMessageKeys(tx);
-      matchedEvent = dflowOpenEvents(tx, keys).find(
-        (event) => event.userOrder.toBase58() === orderAddress.toBase58(),
-      );
-      if (matchedEvent) {
-        signature = entry.signature;
-        break;
-      }
-      await sleep(200);
+async function probeDflowUserOrderLayout(tradeAccounts) {
+  const samples = [];
+
+  for (const { trade, account } of tradeAccounts) {
+    if (
+      !account ||
+      account.owner !== DFLOW_PM.toBase58() ||
+      account.data?.[0] === undefined
+    ) {
+      continue;
     }
 
-    if (!matchedEvent) continue;
+    const accountData = Buffer.from(account.data[0], "base64");
+    if (accountData.length !== 344) continue;
 
-    const [base64Data] = live.account.data;
-    const accountData = Buffer.from(base64Data, "base64");
+    const outputMint = new PublicKey(trade.outputMint);
+    const inputMint =
+      typeof trade.inputMint === "string" ? new PublicKey(trade.inputMint) : null;
+
     samples.push({
-      userOrder: orderAddress.toBase58(),
-      signature,
-      inputMint: matchedEvent.inputMint.toBase58(),
-      outputMint: matchedEvent.outputMint.toBase58(),
-      inputAmount: matchedEvent.inputAmount.toString(),
-      outputAmount: matchedEvent.outputAmount.toString(),
-      inputMintOffsets: findByteOffsets(accountData, matchedEvent.inputMint.toBuffer()),
-      outputMintOffsets: findByteOffsets(accountData, matchedEvent.outputMint.toBuffer()),
+      userOrder: trade.orderAccount,
+      signature: trade.transactionSignature ?? null,
+      inputMint: trade.inputMint ?? null,
+      outputMint: trade.outputMint,
+      inputAmount: String(trade.inputAmount ?? ""),
+      outputAmount: String(trade.outputAmount ?? ""),
+      inputMintOffsets: inputMint
+        ? findByteOffsets(accountData, inputMint.toBuffer())
+        : [],
+      outputMintOffsets: findByteOffsets(accountData, outputMint.toBuffer()),
     });
-    if (samples.length >= 3) break;
+
+    if (samples.length >= 5) break;
   }
 
   const populated = samples.filter((sample) => sample.outputMintOffsets.length > 0);
@@ -418,99 +454,34 @@ async function probeDflowUserOrderLayout() {
   }
 
   return {
-    liveUserOrderCount: programAccounts?.length ?? 0,
+    sampledOrders: tradeAccounts.length,
     stableOutputMintOffset,
     samples,
   };
 }
 
-function dflowReferencedIndexes(tx, keys) {
-  const indexes = new Set();
-  for (const ix of allCompiledInstructions(tx)) {
-    if (typeof ix.programIdIndex !== "number") continue;
-    if (keys[ix.programIdIndex] !== DFLOW_PM.toBase58()) continue;
-    for (const index of ix.accounts ?? []) indexes.add(index);
-  }
-  return indexes;
-}
+async function probeDflowTerminalAccountClosure(tradeAccounts) {
+  const evidence = tradeAccounts
+    .filter(({ account }) => account === null)
+    .slice(0, 5)
+    .map(({ trade }) => ({
+      orderAccount: trade.orderAccount,
+      fillSignature: trade.transactionSignature ?? null,
+      inputMint: trade.inputMint ?? null,
+      outputMint: trade.outputMint,
+    }));
 
-async function probeDflowTerminalAccountClosure() {
-  const rent344 = await jsonRpc(
-    MAINNET_RPC_URL,
-    "getMinimumBalanceForRentExemption",
-    [344, { commitment: "confirmed" }],
-  );
-
-  const evidence = [];
-  let before;
-  let scanned = 0;
-  const maxSignatures = 400;
-
-  while (scanned < maxSignatures && evidence.length < 2) {
-    const options = { limit: Math.min(100, maxSignatures - scanned) };
-    if (before) options.before = before;
-
-    const signatures = await jsonRpc(
-      MAINNET_RPC_URL,
-      "getSignaturesForAddress",
-      [DFLOW_PM.toBase58(), options],
-    );
-    if (!signatures?.length) break;
-
-    scanned += signatures.length;
-    before = signatures[signatures.length - 1].signature;
-
-    for (const entry of signatures) {
-      if (entry.err !== null) continue;
-
-      const tx = await jsonRpc(MAINNET_RPC_URL, "getTransaction", [
-        entry.signature,
-        { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 },
-      ]);
-      if (!tx?.meta || tx.meta.err) {
-        await sleep(100);
-        continue;
-      }
-
-      const keys = resolvedMessageKeys(tx);
-      const terminalType = terminalDflowEventType(tx, keys);
-      if (terminalType === null) continue;
-
-      const referenced = dflowReferencedIndexes(tx, keys);
-      const closedOrderCandidates = [];
-      for (const index of referenced) {
-        const pre = tx.meta.preBalances?.[index] ?? 0;
-        const post = tx.meta.postBalances?.[index] ?? 0;
-        if (pre === rent344 && post === 0) {
-          closedOrderCandidates.push(keys[index]);
-        }
-      }
-
-      evidence.push({
-        signature: entry.signature,
-        terminalType: terminalType === 0x03 ? "cancel" : "revert",
-        closedOrderCandidates,
-      });
-
-      if (evidence.length >= 2) break;
-      await sleep(100);
-    }
-  }
-
-  if (evidence.length === 0) {
+  if (evidence.length < 2) {
     throw new Error(
-      `No DFlow Cancel/Revert events found after scanning ${scanned} recent program signatures`,
+      `DFlow onchain-trades/mainnet correlation found only ${evidence.length} deallocated filled order accounts`,
     );
   }
-  for (const item of evidence) {
-    if (item.closedOrderCandidates.length !== 1) {
-      throw new Error(
-        `Terminal DFlow tx ${item.signature} had ${item.closedOrderCandidates.length} 344-byte-rent closed DFlow account candidates`,
-      );
-    }
-  }
 
-  return { rent344, scannedSignatures: scanned, evidence };
+  return {
+    sampledOrders: tradeAccounts.length,
+    deallocatedFilledOrders: evidence.length,
+    evidence,
+  };
 }
 
 async function main() {
@@ -1115,12 +1086,15 @@ async function main() {
     throw new Error("terminal refund was not swept back into vault_usdc");
   }
 
-  const dflowUserOrderLayout = await probeDflowUserOrderLayout();
+  const dflowTrades = await fetchDflowOnchainTrades();
+  const dflowTradeAccounts = await dflowTradeOrderAccounts(dflowTrades);
+  const dflowUserOrderLayout = await probeDflowUserOrderLayout(dflowTradeAccounts);
   console.log(
     "DFlow user-order layout probe:",
     JSON.stringify(dflowUserOrderLayout, null, 2),
   );
-  const dflowTerminalClosure = await probeDflowTerminalAccountClosure();
+  const dflowTerminalClosure =
+    await probeDflowTerminalAccountClosure(dflowTradeAccounts);
 
   console.log(JSON.stringify({
     rpc: RPC_URL,
