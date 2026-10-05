@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: pactum-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: pactum-ci-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
