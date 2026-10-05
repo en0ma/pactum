@@ -50,7 +50,8 @@ jobs:
       - name: Install Anchor CLI
         run: |
           cargo install --git https://github.com/solana-foundation/anchor avm --force
-          avm install ${ANCHOR_VERSION} --from-source
+          rustup toolchain install 1.91.0 --profile minimal
+          RUSTUP_TOOLCHAIN=1.91.0 avm install ${ANCHOR_VERSION} --from-source
           avm use ${ANCHOR_VERSION}
           echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
 
@@ -135,7 +136,8 @@ jobs:
       - name: Install Anchor CLI
         run: |
           cargo install --git https://github.com/solana-foundation/anchor avm --force
-          avm install ${ANCHOR_VERSION} --from-source
+          rustup toolchain install 1.91.0 --profile minimal
+          RUSTUP_TOOLCHAIN=1.91.0 avm install ${ANCHOR_VERSION} --from-source
           avm use ${ANCHOR_VERSION}
           echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
 
