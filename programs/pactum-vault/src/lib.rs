@@ -581,7 +581,7 @@ pub mod pactum_vault {
         )?;
 
         token::revoke(CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.token_program.key(),
             Revoke {
                 source: ctx.accounts.vault_usdc.to_account_info(),
                 authority: ctx.accounts.vault_authority.to_account_info(),
