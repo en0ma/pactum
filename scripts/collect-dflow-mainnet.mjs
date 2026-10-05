@@ -28,6 +28,8 @@ const OUTPUT =
 const DFLOW_PM = new PublicKey(
   "pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb",
 );
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const SPL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
 const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -111,6 +113,41 @@ function parseUserOrderEvent(data) {
     outputAmount: data.readBigUInt64LE(114).toString(),
     feeMint: new PublicKey(data.subarray(122, 154)).toBase58(),
     feeAmount: data.readBigUInt64LE(154).toString(),
+  };
+}
+
+function readU64LE(buffer, offset) {
+  if (buffer.length < offset + 8) return null;
+  return buffer.readBigUInt64LE(offset);
+}
+
+function classifyOpenInstruction(ix) {
+  if (!ix?.dataHex) return null;
+  const data = Buffer.from(ix.dataHex, "hex");
+  if (data.length !== 80) return null;
+  if (readU64LE(data, 0) !== 0x40n) return null;
+  if (ix.accounts.length !== 11) return null;
+  if (ix.accounts[4] !== USDC_MINT) return null;
+  if (ix.accounts[9] !== SPL_TOKEN_PROGRAM) return null;
+  if (
+    !ix.accounts[3] ||
+    !ix.accounts[5] ||
+    !ix.accounts[6] ||
+    ix.accounts[6] !== ix.accounts[7] ||
+    ix.accounts[7] !== ix.accounts[8]
+  ) {
+    return null;
+  }
+
+  return {
+    orderAccount: ix.accounts[3],
+    marketLedger: ix.accounts[1],
+    marketUsdcAccount: ix.accounts[2],
+    sourceUsdc: ix.accounts[5],
+    user: ix.accounts[6],
+    inputAmount: readU64LE(data, 24)?.toString() ?? null,
+    quotedOutputAmount: readU64LE(data, 32)?.toString() ?? null,
+    dataHex: ix.dataHex,
   };
 }
 
@@ -284,21 +321,28 @@ async function discoverOrdersFromChain(connection) {
       const keys = resolvedKeys(tx);
       const dflowIxs = dflowInstructions(tx, keys);
       for (const ix of dflowIxs) {
-        const event = ix.event;
-        if (!event || event.typeName !== "open") continue;
-        if (!orders.has(event.userOrder)) {
-          orders.set(event.userOrder, {
-            orderAccount: event.userOrder,
+        const open = classifyOpenInstruction(ix);
+        if (!open) continue;
+
+        const deltas = tokenBalanceDeltas(tx, keys);
+        const sourceDelta = deltas.find(
+          (delta) =>
+            delta.account === open.sourceUsdc &&
+            delta.mint === USDC_MINT &&
+            BigInt(delta.delta) < 0n,
+        );
+        if (!sourceDelta) continue;
+        if (-BigInt(sourceDelta.delta) !== BigInt(open.inputAmount)) continue;
+
+        if (!orders.has(open.orderAccount)) {
+          orders.set(open.orderAccount, {
+            ...open,
             openSignature: item.signature,
             openSlot: tx.slot,
             openBlockTime: tx.blockTime,
             openSigners: signerKeys(tx),
-            inputMint: event.inputMint,
-            inputAmount: event.inputAmount,
-            outputMint: event.outputMint,
-            outputAmount: event.outputAmount,
-            openDflowInstructionAccounts: ix.accounts,
-            openTokenBalanceDeltas: tokenBalanceDeltas(tx, keys),
+            inputMint: USDC_MINT,
+            openTokenBalanceDeltas: deltas,
           });
         }
       }
@@ -341,86 +385,79 @@ async function collectOrder(connection, seed) {
     const keys = resolvedKeys(tx);
     const deltas = tokenBalanceDeltas(tx, keys);
     const dflowIxs = dflowInstructions(tx, keys);
-    const events = dflowIxs
-      .map((ix) => ix.event)
-      .filter(
-        (event) =>
-          event &&
-          event.userOrder === seed.orderAccount,
-      );
-
-    if (events.length === 0) continue;
+    if (dflowIxs.length === 0) continue;
 
     txs.push({
       signature: item.signature,
       slot: tx.slot,
       blockTime: tx.blockTime,
       signers: signerKeys(tx),
-      events,
       tokenBalanceDeltas: deltas,
-      dflowInstructions: dflowIxs.map((ix) => ({
-        accounts: ix.accounts,
-        dataHex: ix.dataHex,
-        event: ix.event,
-      })),
+      dflowInstructions: dflowIxs.map((ix) => {
+        const data = ix.dataHex ? Buffer.from(ix.dataHex, "hex") : null;
+        return {
+          accounts: ix.accounts,
+          dataHex: ix.dataHex,
+          dataLength: data?.length ?? null,
+          actionU64:
+            data && data.length >= 8 ? readU64LE(data, 0)?.toString() : null,
+          parsedEvent: ix.event,
+        };
+      }),
     });
     await sleep(150);
   }
 
   txs.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
-  const events = txs.flatMap((tx) =>
-    tx.events.map((event) => ({
-      signature: tx.signature,
-      slot: tx.slot,
-      blockTime: tx.blockTime,
-      ...event,
-    })),
-  );
 
-  const fillRecipients = txs.flatMap((tx) =>
-    tx.events
-      .filter((event) => event.typeName === "fill")
-      .map((event) => ({
-        signature: tx.signature,
-        recipient: positiveRecipient(
-          tx.tokenBalanceDeltas,
-          event.outputMint,
-        ),
-      }))
-      .filter((item) => item.recipient),
-  );
+  const source = {
+    account: seed.sourceUsdc,
+    owner:
+      seed.openTokenBalanceDeltas.find(
+        (item) => item.account === seed.sourceUsdc && item.mint === USDC_MINT,
+      )?.owner ?? null,
+    delta:
+      seed.openTokenBalanceDeltas.find(
+        (item) => item.account === seed.sourceUsdc && item.mint === USDC_MINT,
+      )?.delta ?? null,
+  };
 
-  const refundRecipients = txs.flatMap((tx) =>
-    tx.events
+  const nonOpenTransactions = txs.filter(
+    (tx) => tx.signature !== seed.openSignature,
+  );
+  const outputCandidates = nonOpenTransactions.flatMap((tx) =>
+    tx.tokenBalanceDeltas
       .filter(
-        (event) =>
-          event.typeName === "cancel" || event.typeName === "revert",
+        (item) =>
+          item.mint !== USDC_MINT &&
+          BigInt(item.delta) > 0n,
       )
-      .map((event) => ({
+      .map((item) => ({
         signature: tx.signature,
-        recipient: positiveRecipient(
-          tx.tokenBalanceDeltas,
-          event.inputMint,
-        ),
-      }))
-      .filter((item) => item.recipient),
+        slot: tx.slot,
+        account: item.account,
+        owner: item.owner,
+        mint: item.mint,
+        delta: item.delta,
+        programId: item.programId,
+      })),
   );
-
-  const openTx = txs.find((tx) =>
-    tx.events.some((event) => event.typeName === "open"),
+  const refundCandidates = nonOpenTransactions.flatMap((tx) =>
+    tx.tokenBalanceDeltas
+      .filter(
+        (item) =>
+          item.mint === USDC_MINT &&
+          BigInt(item.delta) > 0n,
+      )
+      .map((item) => ({
+        signature: tx.signature,
+        slot: tx.slot,
+        account: item.account,
+        owner: item.owner,
+        mint: item.mint,
+        delta: item.delta,
+      })),
   );
-  const source = openTx
-    ? negativeSource(openTx.tokenBalanceDeltas, seed.inputMint)
-    : null;
-
-  const observedFillOwners = [
-    ...new Set(fillRecipients.map((item) => item.recipient.owner).filter(Boolean)),
-  ];
-  const observedRefundOwners = [
-    ...new Set(
-      refundRecipients.map((item) => item.recipient.owner).filter(Boolean),
-    ),
-  ];
 
   let account = null;
   if (accountInfo) {
@@ -430,12 +467,20 @@ async function collectOrder(connection, seed) {
       lamports: accountInfo.lamports,
       dataLength: data.length,
       dataBase64: data.toString("base64"),
-      outputMintOffsets: findOffsets(data, seed.outputMint),
+      outputMintOffsets: [
+        ...new Set(outputCandidates.map((item) => item.mint)),
+      ].flatMap((mint) =>
+        findOffsets(data, mint).map((offset) => ({ mint, offset })),
+      ),
       sourceOwnerOffsets: findOffsets(data, source?.owner),
-      fillRecipientOwnerOffsets: observedFillOwners.flatMap((owner) =>
+      fillRecipientOwnerOffsets: [
+        ...new Set(outputCandidates.map((item) => item.owner).filter(Boolean)),
+      ].flatMap((owner) =>
         findOffsets(data, owner).map((offset) => ({ owner, offset })),
       ),
-      refundRecipientOwnerOffsets: observedRefundOwners.flatMap((owner) =>
+      refundRecipientOwnerOffsets: [
+        ...new Set(refundCandidates.map((item) => item.owner).filter(Boolean)),
+      ].flatMap((owner) =>
         findOffsets(data, owner).map((offset) => ({ owner, offset })),
       ),
       signerOffsets: seed.openSigners.flatMap((signer) =>
@@ -447,10 +492,9 @@ async function collectOrder(connection, seed) {
   return {
     seed,
     source,
-    fillRecipients,
-    refundRecipients,
+    outputCandidates,
+    refundCandidates,
     account,
-    events,
     transactions: txs,
   };
 }
@@ -467,54 +511,40 @@ function stableNumberOffset(samples, getter) {
 }
 
 function summarize(samples, scannedSignatures) {
-  const lifecycleCounts = {};
+  const actionCounts = {};
   let live344 = 0;
-  let sourceOwnerDiffersFromOpenSigner = 0;
-  let fillOwnerDiffersFromOpenSigner = 0;
-  let refundOwnerDiffersFromOpenSigner = 0;
+  let sourceOwnerDiffersFromOpenUser = 0;
+  let ordersWithOutcomeCandidate = 0;
+  let ordersWithRefundCandidate = 0;
 
   for (const sample of samples) {
     if (sample.account?.dataLength === 344) live344 += 1;
-    const signers = new Set(sample.seed.openSigners);
-    if (sample.source?.owner && !signers.has(sample.source.owner)) {
-      sourceOwnerDiffersFromOpenSigner += 1;
-    }
     if (
-      sample.fillRecipients.some(
-        (item) =>
-          item.recipient.owner && !signers.has(item.recipient.owner),
-      )
+      sample.source?.owner &&
+      sample.seed.user &&
+      sample.source.owner !== sample.seed.user
     ) {
-      fillOwnerDiffersFromOpenSigner += 1;
+      sourceOwnerDiffersFromOpenUser += 1;
     }
-    if (
-      sample.refundRecipients.some(
-        (item) =>
-          item.recipient.owner && !signers.has(item.recipient.owner),
-      )
-    ) {
-      refundOwnerDiffersFromOpenSigner += 1;
-    }
+    if (sample.outputCandidates?.length > 0) ordersWithOutcomeCandidate += 1;
+    if (sample.refundCandidates?.length > 0) ordersWithRefundCandidate += 1;
 
-    const key =
-      sample.events.map((event) => event.typeName).join("->") || "none";
-    lifecycleCounts[key] = (lifecycleCounts[key] ?? 0) + 1;
+    for (const tx of sample.transactions ?? []) {
+      for (const ix of tx.dflowInstructions ?? []) {
+        const key = ix.actionU64 ?? `len:${ix.dataLength}`;
+        actionCounts[key] = (actionCounts[key] ?? 0) + 1;
+      }
+    }
   }
 
   return {
     scannedProgramSignatures: scannedSignatures,
     sampledOrders: samples.length,
     live344OrderAccounts: live344,
-    sourceOwnerDiffersFromOpenSigner,
-    fillOwnerDiffersFromOpenSigner,
-    refundOwnerDiffersFromOpenSigner,
-    stableOffsetsAmongLive344: {
-      outputMint: stableNumberOffset(
-        samples.filter((sample) => sample.account?.dataLength === 344),
-        (sample) => sample.account.outputMintOffsets,
-      ),
-    },
-    lifecycleCounts,
+    sourceOwnerDiffersFromOpenUser,
+    ordersWithOutcomeCandidate,
+    ordersWithRefundCandidate,
+    actionCounts,
   };
 }
 
