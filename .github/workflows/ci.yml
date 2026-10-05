@@ -120,11 +120,12 @@ jobs:
         env:
           DFLOW_DATASET_SAMPLE_LIMIT: "20"
           DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE: "1000"
-          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "20000"
+          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "5000"
           DFLOW_DATASET_START_BEFORE_SIGNATURE: "2vY7wM1MxhaZHEmWRdWSXhqaMQH6xga9FTJwZ51Fun3kypcmQ1X4N37BrVkBsvuE3zpbbyXnLkmUgL5u5TMUFiwh"
           DFLOW_DATASET_SCAN_AFTER: "2026-05-01T00:00:00Z"
           DFLOW_DATASET_SCAN_BEFORE: "2026-06-01T00:00:00Z"
           DFLOW_DATASET_TX_LIMIT_PER_ORDER: "24"
+          DFLOW_DATASET_MAX_RUNTIME_MS: "360000"
         run: node scripts/collect-dflow-mainnet.mjs
 
       - name: Upload DFlow mainnet evidence
