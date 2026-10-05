@@ -1,8 +1,16 @@
 import fs from "node:fs";
 import { Connection, PublicKey } from "@solana/web3.js";
 
-const MAINNET_RPC_URL =
-  process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL;
+if (!MAINNET_RPC_URL) {
+  throw new Error("MAINNET_RPC_URL is required for DFlow mainnet evidence");
+}
+const RPC_HOSTNAME = new URL(MAINNET_RPC_URL).hostname;
+if (RPC_HOSTNAME === "api.mainnet-beta.solana.com") {
+  throw new Error(
+    "DFlow evidence must use the configured private MAINNET_RPC_URL, not the public Solana RPC",
+  );
+}
 const SAMPLE_LIMIT = Number(process.env.DFLOW_DATASET_SAMPLE_LIMIT ?? "40");
 const PROGRAM_SIGNATURE_PAGE = Number(
   process.env.DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE ?? "100",
@@ -27,6 +35,31 @@ const BASE58_MAP = new Map([...BASE58_ALPHABET].map((ch, i) => [ch, BigInt(i)]))
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimitError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("429") ||
+    message.toLowerCase().includes("too many requests") ||
+    message.toLowerCase().includes("rate limit")
+  );
+}
+
+async function rpcWithRetry(label, fn, attempts = 8) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isRateLimitError(error) || attempt === attempts) throw error;
+      const delayMs = Math.min(1000 * 2 ** (attempt - 1), 16000);
+      console.warn(
+        `${label}: RPC rate limited; retry ${attempt}/${attempts} after ${delayMs}ms`,
+      );
+      await sleep(delayMs);
+    }
+  }
+  throw new Error(`${label}: exhausted retries`);
 }
 
 function decodeBase58(text) {
@@ -208,20 +241,15 @@ function negativeSource(deltas, mint) {
     : null;
 }
 
-async function getTransactionWithRetry(connection, signature, attempts = 5) {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const tx = await connection.getTransaction(signature, {
+async function getTransactionWithRetry(connection, signature) {
+  return rpcWithRetry(
+    `getTransaction ${signature.slice(0, 12)}`,
+    () =>
+      connection.getTransaction(signature, {
         commitment: "confirmed",
         maxSupportedTransactionVersion: 0,
-      });
-      if (tx) return tx;
-    } catch (error) {
-      if (attempt === attempts) throw error;
-    }
-    await sleep(350 * attempt);
-  }
-  return null;
+      }),
+  );
 }
 
 async function discoverOrdersFromChain(connection) {
@@ -233,13 +261,17 @@ async function discoverOrdersFromChain(connection) {
     orders.size < SAMPLE_LIMIT &&
     scannedSignatures < PROGRAM_SCAN_LIMIT
   ) {
-    const signatures = await connection.getSignaturesForAddress(
-      DFLOW_PM,
-      {
-        limit: PROGRAM_SIGNATURE_PAGE,
-        ...(before ? { before } : {}),
-      },
-      "confirmed",
+    const signatures = await rpcWithRetry(
+      "getSignaturesForAddress DFlow program",
+      () =>
+        connection.getSignaturesForAddress(
+          DFLOW_PM,
+          {
+            limit: PROGRAM_SIGNATURE_PAGE,
+            ...(before ? { before } : {}),
+          },
+          "confirmed",
+        ),
     );
     if (signatures.length === 0) break;
 
@@ -272,7 +304,7 @@ async function discoverOrdersFromChain(connection) {
       }
 
       if (orders.size >= SAMPLE_LIMIT) break;
-      await sleep(40);
+      await sleep(150);
     }
 
     before = signatures.at(-1)?.signature;
@@ -287,14 +319,19 @@ async function discoverOrdersFromChain(connection) {
 
 async function collectOrder(connection, seed) {
   const order = new PublicKey(seed.orderAccount);
-  const [accountInfo, signatures] = await Promise.all([
-    connection.getAccountInfo(order, "confirmed"),
-    connection.getSignaturesForAddress(
-      order,
-      { limit: TX_LIMIT_PER_ORDER },
-      "confirmed",
-    ),
-  ]);
+  const accountInfo = await rpcWithRetry(
+    `getAccountInfo ${seed.orderAccount}`,
+    () => connection.getAccountInfo(order, "confirmed"),
+  );
+  const signatures = await rpcWithRetry(
+    `getSignaturesForAddress ${seed.orderAccount}`,
+    () =>
+      connection.getSignaturesForAddress(
+        order,
+        { limit: TX_LIMIT_PER_ORDER },
+        "confirmed",
+      ),
+  );
 
   const txs = [];
   for (const item of signatures) {
@@ -327,7 +364,7 @@ async function collectOrder(connection, seed) {
         event: ix.event,
       })),
     });
-    await sleep(40);
+    await sleep(150);
   }
 
   txs.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
@@ -482,6 +519,7 @@ function summarize(samples, scannedSignatures) {
 }
 
 async function main() {
+  console.log(`Using configured mainnet RPC host: ${RPC_HOSTNAME}`);
   const connection = new Connection(MAINNET_RPC_URL, "confirmed");
   const discovery = await discoverOrdersFromChain(connection);
   if (discovery.candidates.length === 0) {
@@ -510,7 +548,7 @@ async function main() {
     dflowProgram: DFLOW_PM.toBase58(),
     source: {
       kind: "solana-mainnet-rpc-only",
-      rpc: MAINNET_RPC_URL,
+      rpcHost: RPC_HOSTNAME,
       sampleLimit: SAMPLE_LIMIT,
       programScanLimit: PROGRAM_SCAN_LIMIT,
       programSignaturePage: PROGRAM_SIGNATURE_PAGE,
