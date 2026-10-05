@@ -96,6 +96,30 @@ function u16Le(value) {
   return buffer;
 }
 
+function i64Le(value) {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigInt64LE(BigInt(value));
+  return buffer;
+}
+
+function registryMarketBytes({
+  marketLedger,
+  settlementVault,
+  yesMint,
+  noMint,
+  startTs,
+  endTs,
+}) {
+  return Buffer.concat([
+    marketLedger.toBuffer(),
+    settlementVault.toBuffer(),
+    yesMint.toBuffer(),
+    noMint.toBuffer(),
+    i64Le(startTs),
+    i64Le(endTs),
+  ]);
+}
+
 async function sendInstructions(connection, payer, ...instructions) {
   const tx = new Transaction().add(...instructions);
   return sendAndConfirmTransaction(connection, tx, [payer], {
@@ -444,23 +468,41 @@ async function probeDflowUserOrderLayout(tradeAccounts) {
         ? findByteOffsets(accountData, inputMint.toBuffer())
         : [],
       outputMintOffsets: findByteOffsets(accountData, outputMint.toBuffer()),
+      fillRecipient: trade.fillRecipient ?? null,
+      refundRecipient: trade.refundRecipient ?? null,
+      fillRecipientOffsets:
+        typeof trade.fillRecipient === "string"
+          ? findByteOffsets(
+              accountData,
+              new PublicKey(trade.fillRecipient).toBuffer(),
+            )
+          : [],
+      refundRecipientOffsets:
+        typeof trade.refundRecipient === "string"
+          ? findByteOffsets(
+              accountData,
+              new PublicKey(trade.refundRecipient).toBuffer(),
+            )
+          : [],
     });
 
-    if (samples.length >= 5) break;
+    if (samples.length >= 12) break;
   }
 
-  const populated = samples.filter((sample) => sample.outputMintOffsets.length > 0);
-  let stableOutputMintOffset = null;
-  if (populated.length >= 2) {
-    const common = populated[0].outputMintOffsets.filter((offset) =>
-      populated.slice(1).every((sample) => sample.outputMintOffsets.includes(offset)),
+  function stableOffset(field) {
+    const populated = samples.filter((sample) => sample[field].length > 0);
+    if (populated.length < 2) return null;
+    const common = populated[0][field].filter((offset) =>
+      populated.slice(1).every((sample) => sample[field].includes(offset)),
     );
-    if (common.length === 1) stableOutputMintOffset = common[0];
+    return common.length === 1 ? common[0] : null;
   }
 
   return {
     sampledOrders: tradeAccounts.length,
-    stableOutputMintOffset,
+    stableOutputMintOffset: stableOffset("outputMintOffsets"),
+    stableFillRecipientOffset: stableOffset("fillRecipientOffsets"),
+    stableRefundRecipientOffset: stableOffset("refundRecipientOffsets"),
     samples,
   };
 }
@@ -839,6 +881,14 @@ async function main() {
     [Buffer.from("keeper"), config.toBuffer(), payer.publicKey.toBuffer()],
     PROGRAM_ID,
   );
+  const [marketKeeperAuthorization] = PublicKey.findProgramAddressSync(
+    [Buffer.from("market_keeper"), config.toBuffer(), payer.publicKey.toBuffer()],
+    PROGRAM_ID,
+  );
+  const [marketRegistry] = PublicKey.findProgramAddressSync(
+    [Buffer.from("market_registry")],
+    PROGRAM_ID,
+  );
   const [pendingOrder] = PublicKey.findProgramAddressSync(
     [Buffer.from("pending_order"), config.toBuffer()],
     PROGRAM_ID,
@@ -873,23 +923,71 @@ async function main() {
   });
   await sendInstructions(connection, payer, initializeVaultIx);
 
-  const registerMarketIx = new TransactionInstruction({
+  const authorizeMarketKeeperIx = new TransactionInstruction({
     programId: PROGRAM_ID,
     keys: [
       { pubkey: payer.publicKey, isSigner: true, isWritable: true },
       { pubkey: config, isSigner: false, isWritable: false },
-      { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: false },
+      { pubkey: payer.publicKey, isSigner: false, isWritable: false },
+      { pubkey: marketKeeperAuthorization, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("authorize_market_keeper"),
+  });
+  await sendInstructions(connection, payer, authorizeMarketKeeperIx);
+
+  const nowTs = Math.floor(Date.now() / 1000);
+  const previousMarket = {
+    marketLedger: Keypair.generate().publicKey,
+    settlementVault: Keypair.generate().publicKey,
+    yesMint: Keypair.generate().publicKey,
+    noMint: Keypair.generate().publicKey,
+    startTs: nowTs - 1800,
+    endTs: nowTs - 900,
+  };
+  const currentMarket = {
+    marketLedger: OPEN_PROBE_MARKET_LEDGER,
+    settlementVault: openProbeMarketUsdc,
+    yesMint: dflowRegistry.yesMint,
+    noMint: dflowRegistry.noMint,
+    startTs: nowTs - 300,
+    endTs: nowTs + 600,
+  };
+  const nextMarket = {
+    marketLedger: Keypair.generate().publicKey,
+    settlementVault: Keypair.generate().publicKey,
+    yesMint: Keypair.generate().publicKey,
+    noMint: Keypair.generate().publicKey,
+    startTs: nowTs + 600,
+    endTs: nowTs + 1500,
+  };
+  const observedSlot = BigInt(await connection.getSlot("confirmed"));
+
+  const updateMarketRegistryIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: false },
+      { pubkey: marketKeeperAuthorization, isSigner: false, isWritable: false },
+      { pubkey: marketRegistry, isSigner: false, isWritable: true },
+      { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: true },
+      { pubkey: openProbeMarketUsdc, isSigner: false, isWritable: false },
+      { pubkey: dflowRegistry.yesMint, isSigner: false, isWritable: false },
+      { pubkey: dflowRegistry.noMint, isSigner: false, isWritable: false },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
       { pubkey: approvedMarket, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([
-      anchorDiscriminator("register_market"),
-      openProbeMarketUsdc.toBuffer(),
-      dflowRegistry.yesMint.toBuffer(),
-      dflowRegistry.noMint.toBuffer(),
+      anchorDiscriminator("update_market_registry"),
+      registryMarketBytes(previousMarket),
+      registryMarketBytes(currentMarket),
+      registryMarketBytes(nextMarket),
+      u64Le(1),
+      u64Le(observedSlot),
     ]),
   });
-  await sendInstructions(connection, payer, registerMarketIx);
+  await sendInstructions(connection, payer, updateMarketRegistryIx);
 
   const authorizeKeeperIx = new TransactionInstruction({
     programId: PROGRAM_ID,
@@ -1178,6 +1276,15 @@ async function main() {
     "DFlow user-order layout probe:",
     JSON.stringify(dflowUserOrderLayout, null, 2),
   );
+  if (
+    dflowUserOrderLayout.stableOutputMintOffset === null ||
+    dflowUserOrderLayout.stableFillRecipientOffset === null ||
+    dflowUserOrderLayout.stableRefundRecipientOffset === null
+  ) {
+    throw new Error(
+      "DFlow live user-order samples did not establish stable output-mint, fill-recipient, and refund-recipient offsets",
+    );
+  }
   const dflowTerminalClosure =
     await probeDflowTerminalAccountClosure(dflowTradeAccounts);
 
