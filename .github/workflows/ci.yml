@@ -97,6 +97,40 @@ jobs:
             exit 1
           fi
 
+  dflow-evidence:
+    name: DFlow mainnet evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL || 'https://api.mainnet-beta.solana.com' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Collect DFlow mainnet evidence
+        env:
+          DFLOW_API_KEY: ${{ secrets.DFLOW_API_KEY }}
+          DFLOW_DATASET_SAMPLE_LIMIT: "40"
+          DFLOW_DATASET_TX_LIMIT_PER_ORDER: "32"
+        run: node scripts/collect-dflow-mainnet.mjs
+
+      - name: Upload DFlow mainnet evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dflow-mainnet-observations
+          path: artifacts/dflow-mainnet-observations.json
+          if-no-files-found: warn
+          retention-days: 14
+
   mainnet-fork:
     name: Mainnet fork / DFlow CPI / CU budgets
     runs-on: ubuntu-24.04
@@ -145,22 +179,6 @@ jobs:
         run: |
           curl -sL https://run.surfpool.run/ | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Collect DFlow mainnet evidence
-        env:
-          DFLOW_API_KEY: ${{ secrets.DFLOW_API_KEY }}
-          DFLOW_DATASET_SAMPLE_LIMIT: "40"
-          DFLOW_DATASET_TX_LIMIT_PER_ORDER: "32"
-        run: node scripts/collect-dflow-mainnet.mjs
-
-      - name: Upload DFlow mainnet evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dflow-mainnet-observations
-          path: artifacts/dflow-mainnet-observations.json
-          if-no-files-found: warn
-          retention-days: 14
 
       - name: Run fork tests
         run: bash scripts/run-fork-ci.sh
