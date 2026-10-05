@@ -32,6 +32,8 @@ const TX_LIMIT_PER_ORDER = Number(
 const OUTPUT =
   process.env.DFLOW_DATASET_OUTPUT ??
   "artifacts/dflow-mainnet-observations.json";
+const START_BEFORE_SIGNATURE =
+  process.env.DFLOW_DATASET_START_BEFORE_SIGNATURE || undefined;
 
 const DFLOW_PM = new PublicKey(
   "pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb",
@@ -323,8 +325,10 @@ async function discoverOrdersFromChain(connection) {
   const orders = new Map();
   const instructionShapes = {};
   const instructionExamples = [];
-  let before;
+  let before = START_BEFORE_SIGNATURE;
   let scannedSignatures = 0;
+  let oldestSignature = before ?? null;
+  let oldestBlockTime = null;
   let windowSignatures = 0;
   let dflowInstructionCount = 0;
   let reachedWindow = false;
@@ -347,6 +351,18 @@ async function discoverOrdersFromChain(connection) {
     );
     if (signatures.length === 0) break;
 
+    const tail = signatures.at(-1);
+    if (tail) {
+      oldestSignature = tail.signature;
+      oldestBlockTime = tail.blockTime ?? oldestBlockTime;
+    }
+
+    if (scannedSignatures === 0 || scannedSignatures % 5000 === 0) {
+      console.log(
+        `historical scan progress: scanned=${scannedSignatures}, oldestBlockTime=${oldestBlockTime ? new Date(oldestBlockTime * 1000).toISOString() : "unknown"}`,
+      );
+    }
+
     for (const item of signatures) {
       scannedSignatures += 1;
       if (!item.blockTime) continue;
@@ -363,6 +379,8 @@ async function discoverOrdersFromChain(connection) {
           instructionShapes,
           instructionExamples,
           reachedWindow,
+          oldestSignature,
+          oldestBlockTime,
         };
       }
 
@@ -447,6 +465,8 @@ async function discoverOrdersFromChain(connection) {
     instructionShapes,
     instructionExamples,
     reachedWindow,
+    oldestSignature,
+    oldestBlockTime,
   };
 }
 
@@ -667,6 +687,7 @@ async function main() {
       programSignaturePage: PROGRAM_SIGNATURE_PAGE,
       scanAfterUnix: SCAN_AFTER_UNIX,
       scanBeforeUnix: SCAN_BEFORE_UNIX,
+      startBeforeSignature: START_BEFORE_SIGNATURE ?? null,
       txLimitPerOrder: TX_LIMIT_PER_ORDER,
     },
     summary: {
@@ -675,6 +696,11 @@ async function main() {
       dflowInstructionCount: discovery.dflowInstructionCount,
       windowSignatures: discovery.windowSignatures,
       reachedHistoricalWindow: discovery.reachedWindow,
+      oldestSignature: discovery.oldestSignature,
+      oldestBlockTime: discovery.oldestBlockTime,
+      oldestBlockTimeIso: discovery.oldestBlockTime
+        ? new Date(discovery.oldestBlockTime * 1000).toISOString()
+        : null,
       instructionShapes: discovery.instructionShapes,
     },
     instructionExamples: discovery.instructionExamples,
