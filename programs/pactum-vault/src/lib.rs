@@ -148,8 +148,7 @@ pub mod pactum_vault {
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
         require!(
-            ctx.accounts.config.open_exposure_usdc == 0
-                && ctx.accounts.config.open_positions == 0,
+            ctx.accounts.config.open_exposure_usdc == 0 && ctx.accounts.config.open_positions == 0,
             PactumError::ExposureOpen
         );
 
@@ -208,8 +207,7 @@ pub mod pactum_vault {
     pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
         require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
         require!(
-            ctx.accounts.config.open_exposure_usdc == 0
-                && ctx.accounts.config.open_positions == 0,
+            ctx.accounts.config.open_exposure_usdc == 0 && ctx.accounts.config.open_positions == 0,
             PactumError::ExposureOpen
         );
         require!(
