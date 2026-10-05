@@ -249,16 +249,31 @@ async function probeDflowRegistryFixture() {
     throw new Error("DFlow market USDC account mint/authority relationship changed");
   }
 
+  const marketUsdc = new PublicKey(captured.pubkey);
+  const ledgerData = Buffer.from(ledger.data[0], "base64");
+
   return {
     marketLedger: OPEN_PROBE_MARKET_LEDGER,
     marketLedgerAccount: ledger,
-    marketUsdc: new PublicKey(captured.pubkey),
+    marketUsdc,
     marketUsdcAccount: captured.account,
     yesMint: OPEN_PROBE_YES_MINT,
     yesMintAccount: yesMint,
     noMint: OPEN_PROBE_NO_MINT,
     noMintAccount: noMint,
-    ledgerDataLength: Buffer.from(ledger.data[0], "base64").length,
+    ledgerDataLength: ledgerData.length,
+    ledgerYesMintOffsets: findByteOffsets(
+      ledgerData,
+      OPEN_PROBE_YES_MINT.toBuffer(),
+    ),
+    ledgerNoMintOffsets: findByteOffsets(
+      ledgerData,
+      OPEN_PROBE_NO_MINT.toBuffer(),
+    ),
+    ledgerUsdcAccountOffsets: findByteOffsets(
+      ledgerData,
+      marketUsdc.toBuffer(),
+    ),
   };
 }
 
@@ -1120,6 +1135,9 @@ async function main() {
       yesMint: dflowRegistry.yesMint.toBase58(),
       noMint: dflowRegistry.noMint.toBase58(),
       ledgerDataLength: dflowRegistry.ledgerDataLength,
+      ledgerYesMintOffsets: dflowRegistry.ledgerYesMintOffsets,
+      ledgerNoMintOffsets: dflowRegistry.ledgerNoMintOffsets,
+      ledgerUsdcAccountOffsets: dflowRegistry.ledgerUsdcAccountOffsets,
     },
     dflowOpenUserOrderProbe: {
       authority: openProbeAuthority.toBase58(),
