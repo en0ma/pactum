@@ -375,11 +375,14 @@ pub mod pactum_vault {
         Ok(())
     }
 
-    /// Open a DFlow prediction-market order directly from Pactum custody.
+    /// Open a DFlow prediction-market order from Pactum custody.
     ///
-    /// The keeper selects the already-approved market and trade parameters, but
-    /// never receives custody. VaultAuthorityPDA is the DFlow signer via
-    /// invoke_signed and DFlow debits the PDA-owned USDC vault directly.
+    /// The strategy keeper remains the DFlow user/signer and chooses the
+    /// market, side, amount, quote, and timing. Pactum requires that market
+    /// data to agree with the independently maintained market registry before
+    /// it applies vault risk limits. VaultAuthorityPDA then grants the keeper
+    /// an exact, instruction-scoped SPL delegate allowance, calls DFlow, and
+    /// revokes the allowance before this instruction can commit.
     pub fn execute_trade(
         ctx: Context<ExecuteTrade>,
         order_data: [u8; dflow::prediction_v1::OPEN_USER_ORDER_DATA_LEN],
@@ -389,19 +392,34 @@ pub mod pactum_vault {
     ) -> Result<()> {
         require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
 
-        math::validate_trade_amount(
-            input_amount,
-            ctx.accounts.config.open_exposure_usdc,
-            ctx.accounts.config.max_trade_usdc,
-            ctx.accounts.config.max_total_exposure_usdc,
-        )?;
-
-        let decoded = dflow::prediction_v1::validate_open_order_data(
-            &order_data,
-            input_amount,
-            quoted_outcome_atoms,
-            slippage_bps,
-        )?;
+        let clock = Clock::get()?;
+        let current = &ctx.accounts.market_registry.current;
+        require!(
+            ctx.accounts.market_registry.sequence > 0
+                && current.start_ts <= clock.unix_timestamp
+                && clock.unix_timestamp < current.end_ts,
+            PactumError::MarketRegistryStale
+        );
+        require_keys_eq!(
+            current.market_ledger,
+            ctx.accounts.approved_market.market_ledger,
+            PactumError::MarketRegistryMismatch
+        );
+        require_keys_eq!(
+            current.settlement_vault,
+            ctx.accounts.approved_market.settlement_vault,
+            PactumError::MarketRegistryMismatch
+        );
+        require_keys_eq!(
+            current.yes_mint,
+            ctx.accounts.approved_market.yes_mint,
+            PactumError::MarketRegistryMismatch
+        );
+        require_keys_eq!(
+            current.no_mint,
+            ctx.accounts.approved_market.no_mint,
+            PactumError::MarketRegistryMismatch
+        );
 
         require!(
             ctx.accounts.approved_market.enabled,
@@ -411,6 +429,21 @@ pub mod pactum_vault {
             &ctx.accounts.approved_market,
             ctx.accounts.outcome_mint.key(),
         )?;
+
+        let decoded = dflow::prediction_v1::validate_open_order_data(
+            &order_data,
+            input_amount,
+            quoted_outcome_atoms,
+            slippage_bps,
+        )?;
+
+        math::validate_trade_amount(
+            input_amount,
+            ctx.accounts.config.open_exposure_usdc,
+            ctx.accounts.config.max_trade_usdc,
+            ctx.accounts.config.max_total_exposure_usdc,
+        )?;
+
         let outcome_balance_before = ctx.accounts.outcome_ata.amount;
         let refund_usdc_balance_before = ctx.accounts.refund_usdc_ata.amount;
 
@@ -432,7 +465,7 @@ pub mod pactum_vault {
             order_account: ctx.accounts.order_account.key(),
             usdc_mint: ctx.accounts.usdc_mint.key(),
             source_usdc: ctx.accounts.vault_usdc.key(),
-            token_authority: ctx.accounts.vault_authority.key(),
+            token_authority: ctx.accounts.keeper.key(),
             token_program: ctx.accounts.token_program.key(),
             system_program: ctx.accounts.system_program.key(),
         };
@@ -440,8 +473,33 @@ pub mod pactum_vault {
             &keys,
             &ctx.accounts.approved_market,
             ctx.accounts.vault_usdc.key(),
-            ctx.accounts.vault_authority.key(),
+            ctx.accounts.keeper.key(),
         )?;
+
+        let authority_bump = [ctx.accounts.config.vault_authority_bump];
+        let authority_seeds: &[&[u8]] = &[b"vault_authority", &authority_bump];
+        let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+
+        token::approve(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Approve {
+                    to: ctx.accounts.vault_usdc.to_account_info(),
+                    delegate: ctx.accounts.keeper.to_account_info(),
+                    authority: ctx.accounts.vault_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            input_amount,
+        )?;
+
+        ctx.accounts.vault_usdc.reload()?;
+        require!(
+            ctx.accounts.vault_usdc.delegate.is_some()
+                && ctx.accounts.vault_usdc.delegate.unwrap() == ctx.accounts.keeper.key()
+                && ctx.accounts.vault_usdc.delegated_amount == input_amount,
+            PactumError::InvalidDelegateState
+        );
 
         let vault_before = ctx.accounts.vault_usdc.amount;
         let ix = Instruction {
@@ -453,19 +511,16 @@ pub mod pactum_vault {
                 AccountMeta::new(ctx.accounts.order_account.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
                 AccountMeta::new(ctx.accounts.vault_usdc.key(), false),
-                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
-                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
-                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
                 AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
             ],
             data: order_data.to_vec(),
         };
 
-        let authority_bump = [ctx.accounts.config.vault_authority_bump];
-        let authority_seeds: &[&[u8]] = &[b"vault_authority", &authority_bump];
-
-        solana_cpi::invoke_signed(
+        invoke(
             &ix,
             &[
                 ctx.accounts.event_authority.to_account_info(),
@@ -474,15 +529,29 @@ pub mod pactum_vault {
                 ctx.accounts.order_account.to_account_info(),
                 ctx.accounts.usdc_mint.to_account_info(),
                 ctx.accounts.vault_usdc.to_account_info(),
-                ctx.accounts.vault_authority.to_account_info(),
+                ctx.accounts.keeper.to_account_info(),
                 ctx.accounts.token_program.to_account_info(),
                 ctx.accounts.system_program.to_account_info(),
                 ctx.accounts.dflow_program.to_account_info(),
             ],
-            &[authority_seeds],
         )?;
 
+        token::revoke(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Revoke {
+                source: ctx.accounts.vault_usdc.to_account_info(),
+                authority: ctx.accounts.vault_authority.to_account_info(),
+            },
+            signer_seeds,
+        ))?;
+
         ctx.accounts.vault_usdc.reload()?;
+        require!(
+            ctx.accounts.vault_usdc.delegate.is_none()
+                && ctx.accounts.vault_usdc.delegated_amount == 0,
+            PactumError::InvalidDelegateState
+        );
+
         let spent = vault_before
             .checked_sub(ctx.accounts.vault_usdc.amount)
             .ok_or(PactumError::MathOverflow)?;
