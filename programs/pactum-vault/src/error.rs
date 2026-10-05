@@ -34,6 +34,14 @@ pub enum PactumError {
     InvalidDflowAccounts,
     #[msg("DFlow did not debit exactly the validated trade amount")]
     InvalidDflowSpend,
+    #[msg("The strategy keeper market data does not match Pactum's market registry")]
+    MarketRegistryMismatch,
+    #[msg("The Pactum market registry is stale or has no active current market")]
+    MarketRegistryStale,
+    #[msg("The Pactum market registry update is invalid")]
+    InvalidMarketRegistry,
+    #[msg("The temporary keeper delegation is not exact or was not revoked")]
+    InvalidDelegateState,
     #[msg("Trade slippage exceeds Pactum's protocol cap")]
     InvalidSlippage,
     #[msg("The expected DFlow fill is not yet reflected in the PDA-owned outcome ATA")]
