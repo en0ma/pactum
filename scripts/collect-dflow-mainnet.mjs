@@ -34,6 +34,9 @@ const OUTPUT =
   "artifacts/dflow-mainnet-observations.json";
 const START_BEFORE_SIGNATURE =
   process.env.DFLOW_DATASET_START_BEFORE_SIGNATURE || undefined;
+const MAX_RUNTIME_MS = Number(
+  process.env.DFLOW_DATASET_MAX_RUNTIME_MS ?? String(6 * 60 * 1000),
+);
 
 const DFLOW_PM = new PublicKey(
   "pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb",
@@ -322,6 +325,7 @@ async function getTransactionWithRetry(connection, signature) {
 }
 
 async function discoverOrdersFromChain(connection) {
+  const startedAt = Date.now();
   const orders = new Map();
   const instructionShapes = {};
   const instructionExamples = [];
@@ -335,7 +339,8 @@ async function discoverOrdersFromChain(connection) {
 
   while (
     scannedSignatures < PROGRAM_SCAN_LIMIT &&
-    orders.size < SAMPLE_LIMIT
+    orders.size < SAMPLE_LIMIT &&
+    Date.now() - startedAt < MAX_RUNTIME_MS
   ) {
     const signatures = await rpcWithRetry(
       "getSignaturesForAddress DFlow program",
@@ -364,6 +369,7 @@ async function discoverOrdersFromChain(connection) {
     }
 
     for (const item of signatures) {
+      if (Date.now() - startedAt >= MAX_RUNTIME_MS) break;
       scannedSignatures += 1;
       if (!item.blockTime) continue;
 
@@ -689,6 +695,7 @@ async function main() {
       scanBeforeUnix: SCAN_BEFORE_UNIX,
       startBeforeSignature: START_BEFORE_SIGNATURE ?? null,
       txLimitPerOrder: TX_LIMIT_PER_ORDER,
+      maxRuntimeMs: MAX_RUNTIME_MS,
     },
     summary: {
       ...summarize(completeSamples, discovery.scannedSignatures),
