@@ -1,16 +1,15 @@
 import fs from "node:fs";
-import {
-  Connection,
-  PublicKey,
-} from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 
 const MAINNET_RPC_URL =
   process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com";
-const DFLOW_METADATA_API_URL =
-  process.env.DFLOW_METADATA_API_URL ??
-  "https://dev-prediction-markets-api.dflow.net";
-const DFLOW_API_KEY = process.env.DFLOW_API_KEY;
 const SAMPLE_LIMIT = Number(process.env.DFLOW_DATASET_SAMPLE_LIMIT ?? "40");
+const PROGRAM_SIGNATURE_PAGE = Number(
+  process.env.DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE ?? "100",
+);
+const PROGRAM_SCAN_LIMIT = Number(
+  process.env.DFLOW_DATASET_PROGRAM_SCAN_LIMIT ?? "1200",
+);
 const TX_LIMIT_PER_ORDER = Number(
   process.env.DFLOW_DATASET_TX_LIMIT_PER_ORDER ?? "32",
 );
@@ -25,6 +24,10 @@ const DFLOW_PM = new PublicKey(
 const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_MAP = new Map([...BASE58_ALPHABET].map((ch, i) => [ch, BigInt(i)]));
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function decodeBase58(text) {
   let value = 0n;
@@ -106,7 +109,7 @@ function resolvedKeys(tx) {
   ];
 }
 
-function instructions(tx) {
+function allInstructions(tx) {
   return [
     ...(tx.transaction.message.compiledInstructions ?? []),
     ...(tx.meta?.innerInstructions ?? []).flatMap(
@@ -115,20 +118,29 @@ function instructions(tx) {
   ];
 }
 
-function dflowEvents(tx, keys) {
-  const events = [];
-  for (const ix of instructions(tx)) {
-    if (typeof ix.programIdIndex !== "number") continue;
-    if (keys[ix.programIdIndex] !== DFLOW_PM.toBase58()) continue;
-    const encoded = ix.data;
-    if (typeof encoded !== "string") continue;
-    const event = parseUserOrderEvent(decodeBase58(encoded));
-    if (event) events.push(event);
-  }
-  return events;
+function dflowInstructions(tx, keys) {
+  return allInstructions(tx)
+    .filter(
+      (ix) =>
+        typeof ix.programIdIndex === "number" &&
+        keys[ix.programIdIndex] === DFLOW_PM.toBase58(),
+    )
+    .map((ix) => ({
+      accounts: [...(ix.accountKeyIndexes ?? [])].map(
+        (index) => keys[index] ?? null,
+      ),
+      dataHex:
+        typeof ix.data === "string"
+          ? Buffer.from(decodeBase58(ix.data)).toString("hex")
+          : null,
+      event:
+        typeof ix.data === "string"
+          ? parseUserOrderEvent(decodeBase58(ix.data))
+          : null,
+    }));
 }
 
-function tokenBalances(tx, keys) {
+function tokenBalanceDeltas(tx, keys) {
   const before = new Map(
     (tx.meta?.preTokenBalances ?? []).map((item) => [
       `${item.accountIndex}:${item.mint}`,
@@ -142,83 +154,164 @@ function tokenBalances(tx, keys) {
     ]),
   );
   const joined = new Set([...before.keys(), ...after.keys()]);
-  return [...joined].map((key) => {
-    const pre = before.get(key);
-    const post = after.get(key);
-    const accountIndex = (pre ?? post).accountIndex;
-    const preAmount = BigInt(pre?.uiTokenAmount?.amount ?? "0");
-    const postAmount = BigInt(post?.uiTokenAmount?.amount ?? "0");
-    return {
-      accountIndex,
-      account: keys[accountIndex] ?? null,
-      mint: (pre ?? post).mint,
-      owner: post?.owner ?? pre?.owner ?? null,
-      preAmount: preAmount.toString(),
-      postAmount: postAmount.toString(),
-      delta: (postAmount - preAmount).toString(),
-      programId: post?.programId ?? pre?.programId ?? null,
-    };
-  });
+  return [...joined]
+    .map((key) => {
+      const pre = before.get(key);
+      const post = after.get(key);
+      const accountIndex = (pre ?? post).accountIndex;
+      const preAmount = BigInt(pre?.uiTokenAmount?.amount ?? "0");
+      const postAmount = BigInt(post?.uiTokenAmount?.amount ?? "0");
+      return {
+        accountIndex,
+        account: keys[accountIndex] ?? null,
+        mint: (pre ?? post).mint,
+        owner: post?.owner ?? pre?.owner ?? null,
+        preAmount: preAmount.toString(),
+        postAmount: postAmount.toString(),
+        delta: (postAmount - preAmount).toString(),
+        programId: post?.programId ?? pre?.programId ?? null,
+      };
+    })
+    .filter((item) => item.delta !== "0");
 }
 
 function signerKeys(tx) {
-  const header = tx.transaction.message.header;
+  const count = tx.transaction.message.header.numRequiredSignatures;
   return tx.transaction.message.staticAccountKeys
-    .slice(0, header.numRequiredSignatures)
+    .slice(0, count)
     .map((key) => key.toBase58());
 }
 
-async function fetchTrades() {
-  const headers = {};
-  if (DFLOW_API_KEY) headers["x-api-key"] = DFLOW_API_KEY;
-  const response = await fetch(
-    `${DFLOW_METADATA_API_URL}/api/v1/onchain-trades?limit=200`,
-    { headers },
+function positiveRecipient(deltas, mint) {
+  const matches = deltas.filter(
+    (item) => item.mint === mint && BigInt(item.delta) > 0n,
   );
-  if (!response.ok) {
-    throw new Error(
-      `DFlow onchain-trades failed: ${response.status} ${await response.text()}`,
-    );
-  }
-  const body = await response.json();
-  const trades = body?.trades ?? [];
-  if (!Array.isArray(trades) || trades.length === 0) {
-    throw new Error("DFlow onchain-trades returned no trades");
-  }
-  return trades;
+  return matches.length === 1
+    ? {
+        account: matches[0].account,
+        owner: matches[0].owner,
+        delta: matches[0].delta,
+      }
+    : null;
 }
 
-function uniqueOrders(trades) {
+function negativeSource(deltas, mint) {
+  const matches = deltas.filter(
+    (item) => item.mint === mint && BigInt(item.delta) < 0n,
+  );
+  return matches.length === 1
+    ? {
+        account: matches[0].account,
+        owner: matches[0].owner,
+        delta: matches[0].delta,
+      }
+    : null;
+}
+
+async function getTransactionWithRetry(connection, signature, attempts = 5) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const tx = await connection.getTransaction(signature, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      });
+      if (tx) return tx;
+    } catch (error) {
+      if (attempt === attempts) throw error;
+    }
+    await sleep(350 * attempt);
+  }
+  return null;
+}
+
+async function discoverOrdersFromChain(connection) {
   const orders = new Map();
-  for (const trade of trades) {
-    if (typeof trade?.orderAccount !== "string") continue;
-    const current = orders.get(trade.orderAccount);
-    if (!current) orders.set(trade.orderAccount, trade);
+  let before;
+  let scannedSignatures = 0;
+
+  while (
+    orders.size < SAMPLE_LIMIT &&
+    scannedSignatures < PROGRAM_SCAN_LIMIT
+  ) {
+    const signatures = await connection.getSignaturesForAddress(
+      DFLOW_PM,
+      {
+        limit: PROGRAM_SIGNATURE_PAGE,
+        ...(before ? { before } : {}),
+      },
+      "confirmed",
+    );
+    if (signatures.length === 0) break;
+
+    for (const item of signatures) {
+      scannedSignatures += 1;
+      if (item.err) continue;
+
+      const tx = await getTransactionWithRetry(connection, item.signature);
+      if (!tx) continue;
+      const keys = resolvedKeys(tx);
+      const dflowIxs = dflowInstructions(tx, keys);
+      for (const ix of dflowIxs) {
+        const event = ix.event;
+        if (!event || event.typeName !== "open") continue;
+        if (!orders.has(event.userOrder)) {
+          orders.set(event.userOrder, {
+            orderAccount: event.userOrder,
+            openSignature: item.signature,
+            openSlot: tx.slot,
+            openBlockTime: tx.blockTime,
+            openSigners: signerKeys(tx),
+            inputMint: event.inputMint,
+            inputAmount: event.inputAmount,
+            outputMint: event.outputMint,
+            outputAmount: event.outputAmount,
+            openDflowInstructionAccounts: ix.accounts,
+            openTokenBalanceDeltas: tokenBalanceDeltas(tx, keys),
+          });
+        }
+      }
+
+      if (orders.size >= SAMPLE_LIMIT) break;
+      await sleep(40);
+    }
+
+    before = signatures.at(-1)?.signature;
+    if (!before) break;
   }
-  return [...orders.values()].slice(0, SAMPLE_LIMIT);
+
+  return {
+    candidates: [...orders.values()],
+    scannedSignatures,
+  };
 }
 
-async function collectOrder(connection, trade) {
-  const order = new PublicKey(trade.orderAccount);
+async function collectOrder(connection, seed) {
+  const order = new PublicKey(seed.orderAccount);
   const [accountInfo, signatures] = await Promise.all([
     connection.getAccountInfo(order, "confirmed"),
-    connection.getSignaturesForAddress(order, {
-      limit: TX_LIMIT_PER_ORDER,
-    }),
+    connection.getSignaturesForAddress(
+      order,
+      { limit: TX_LIMIT_PER_ORDER },
+      "confirmed",
+    ),
   ]);
 
   const txs = [];
   for (const item of signatures) {
     if (item.err) continue;
-    const tx = await connection.getTransaction(item.signature, {
-      commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
-    });
+    const tx = await getTransactionWithRetry(connection, item.signature);
     if (!tx) continue;
     const keys = resolvedKeys(tx);
-    const events = dflowEvents(tx, keys).filter(
-      (event) => event.userOrder === trade.orderAccount,
-    );
+    const deltas = tokenBalanceDeltas(tx, keys);
+    const dflowIxs = dflowInstructions(tx, keys);
+    const events = dflowIxs
+      .map((ix) => ix.event)
+      .filter(
+        (event) =>
+          event &&
+          event.userOrder === seed.orderAccount,
+      );
+
     if (events.length === 0) continue;
 
     txs.push({
@@ -227,25 +320,14 @@ async function collectOrder(connection, trade) {
       blockTime: tx.blockTime,
       signers: signerKeys(tx),
       events,
-      tokenBalances: tokenBalances(tx, keys).filter(
-        (item) => item.delta !== "0",
-      ),
-      dflowInstructions: instructions(tx)
-        .filter(
-          (ix) =>
-            typeof ix.programIdIndex === "number" &&
-            keys[ix.programIdIndex] === DFLOW_PM.toBase58(),
-        )
-        .map((ix) => ({
-          accounts: [...(ix.accountKeyIndexes ?? [])].map(
-            (index) => keys[index] ?? null,
-          ),
-          data:
-            typeof ix.data === "string"
-              ? Buffer.from(decodeBase58(ix.data)).toString("hex")
-              : null,
-        })),
+      tokenBalanceDeltas: deltas,
+      dflowInstructions: dflowIxs.map((ix) => ({
+        accounts: ix.accounts,
+        dataHex: ix.dataHex,
+        event: ix.event,
+      })),
     });
+    await sleep(40);
   }
 
   txs.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
@@ -258,6 +340,51 @@ async function collectOrder(connection, trade) {
     })),
   );
 
+  const fillRecipients = txs.flatMap((tx) =>
+    tx.events
+      .filter((event) => event.typeName === "fill")
+      .map((event) => ({
+        signature: tx.signature,
+        recipient: positiveRecipient(
+          tx.tokenBalanceDeltas,
+          event.outputMint,
+        ),
+      }))
+      .filter((item) => item.recipient),
+  );
+
+  const refundRecipients = txs.flatMap((tx) =>
+    tx.events
+      .filter(
+        (event) =>
+          event.typeName === "cancel" || event.typeName === "revert",
+      )
+      .map((event) => ({
+        signature: tx.signature,
+        recipient: positiveRecipient(
+          tx.tokenBalanceDeltas,
+          event.inputMint,
+        ),
+      }))
+      .filter((item) => item.recipient),
+  );
+
+  const openTx = txs.find((tx) =>
+    tx.events.some((event) => event.typeName === "open"),
+  );
+  const source = openTx
+    ? negativeSource(openTx.tokenBalanceDeltas, seed.inputMint)
+    : null;
+
+  const observedFillOwners = [
+    ...new Set(fillRecipients.map((item) => item.recipient.owner).filter(Boolean)),
+  ];
+  const observedRefundOwners = [
+    ...new Set(
+      refundRecipients.map((item) => item.recipient.owner).filter(Boolean),
+    ),
+  ];
+
   let account = null;
   if (accountInfo) {
     const data = Buffer.from(accountInfo.data);
@@ -266,36 +393,34 @@ async function collectOrder(connection, trade) {
       lamports: accountInfo.lamports,
       dataLength: data.length,
       dataBase64: data.toString("base64"),
-      outputMintOffsets: findOffsets(data, trade.outputMint),
-      fillRecipientOffsets: findOffsets(data, trade.fillRecipient),
-      refundRecipientOffsets: findOffsets(data, trade.refundRecipient),
-      walletOffsets: findOffsets(data, trade.wallet),
+      outputMintOffsets: findOffsets(data, seed.outputMint),
+      sourceOwnerOffsets: findOffsets(data, source?.owner),
+      fillRecipientOwnerOffsets: observedFillOwners.flatMap((owner) =>
+        findOffsets(data, owner).map((offset) => ({ owner, offset })),
+      ),
+      refundRecipientOwnerOffsets: observedRefundOwners.flatMap((owner) =>
+        findOffsets(data, owner).map((offset) => ({ owner, offset })),
+      ),
+      signerOffsets: seed.openSigners.flatMap((signer) =>
+        findOffsets(data, signer).map((offset) => ({ signer, offset })),
+      ),
     };
   }
 
   return {
-    feed: {
-      orderAccount: trade.orderAccount,
-      wallet: trade.wallet ?? null,
-      fillRecipient: trade.fillRecipient ?? null,
-      refundRecipient: trade.refundRecipient ?? null,
-      inputMint: trade.inputMint ?? null,
-      outputMint: trade.outputMint ?? null,
-      inputAmount: String(trade.inputAmount ?? ""),
-      outputAmount: String(trade.outputAmount ?? ""),
-      transactionSignature: trade.transactionSignature ?? null,
-      marketTicker: trade.marketTicker ?? trade.ticker ?? null,
-    },
+    seed,
+    source,
+    fillRecipients,
+    refundRecipients,
     account,
     events,
     transactions: txs,
   };
 }
 
-function stableOffset(samples, field) {
+function stableNumberOffset(samples, getter) {
   const populated = samples
-    .filter((sample) => sample.account?.dataLength === 344)
-    .map((sample) => sample.account[field])
+    .map(getter)
     .filter((offsets) => Array.isArray(offsets) && offsets.length > 0);
   if (populated.length < 2) return null;
   const common = populated[0].filter((offset) =>
@@ -304,46 +429,53 @@ function stableOffset(samples, field) {
   return common.length === 1 ? common[0] : null;
 }
 
-function summarize(samples) {
+function summarize(samples, scannedSignatures) {
   const lifecycleCounts = {};
-  let distinctWalletFill = 0;
-  let distinctWalletRefund = 0;
-  let terminal = 0;
   let live344 = 0;
+  let sourceOwnerDiffersFromOpenSigner = 0;
+  let fillOwnerDiffersFromOpenSigner = 0;
+  let refundOwnerDiffersFromOpenSigner = 0;
 
   for (const sample of samples) {
     if (sample.account?.dataLength === 344) live344 += 1;
-    if (
-      sample.feed.wallet &&
-      sample.feed.fillRecipient &&
-      sample.feed.wallet !== sample.feed.fillRecipient
-    ) {
-      distinctWalletFill += 1;
+    const signers = new Set(sample.seed.openSigners);
+    if (sample.source?.owner && !signers.has(sample.source.owner)) {
+      sourceOwnerDiffersFromOpenSigner += 1;
     }
     if (
-      sample.feed.wallet &&
-      sample.feed.refundRecipient &&
-      sample.feed.wallet !== sample.feed.refundRecipient
+      sample.fillRecipients.some(
+        (item) =>
+          item.recipient.owner && !signers.has(item.recipient.owner),
+      )
     ) {
-      distinctWalletRefund += 1;
+      fillOwnerDiffersFromOpenSigner += 1;
     }
-    const types = [...new Set(sample.events.map((event) => event.typeName))];
-    const key = types.join("->") || "none";
+    if (
+      sample.refundRecipients.some(
+        (item) =>
+          item.recipient.owner && !signers.has(item.recipient.owner),
+      )
+    ) {
+      refundOwnerDiffersFromOpenSigner += 1;
+    }
+
+    const key =
+      sample.events.map((event) => event.typeName).join("->") || "none";
     lifecycleCounts[key] = (lifecycleCounts[key] ?? 0) + 1;
-    if (types.includes("cancel") || types.includes("revert")) terminal += 1;
   }
 
   return {
+    scannedProgramSignatures: scannedSignatures,
     sampledOrders: samples.length,
     live344OrderAccounts: live344,
-    walletDiffersFromFillRecipient: distinctWalletFill,
-    walletDiffersFromRefundRecipient: distinctWalletRefund,
-    ordersWithCancelOrRevertEvidence: terminal,
+    sourceOwnerDiffersFromOpenSigner,
+    fillOwnerDiffersFromOpenSigner,
+    refundOwnerDiffersFromOpenSigner,
     stableOffsetsAmongLive344: {
-      outputMint: stableOffset(samples, "outputMintOffsets"),
-      fillRecipient: stableOffset(samples, "fillRecipientOffsets"),
-      refundRecipient: stableOffset(samples, "refundRecipientOffsets"),
-      wallet: stableOffset(samples, "walletOffsets"),
+      outputMint: stableNumberOffset(
+        samples.filter((sample) => sample.account?.dataLength === 344),
+        (sample) => sample.account.outputMintOffsets,
+      ),
     },
     lifecycleCounts,
   };
@@ -351,50 +483,47 @@ function summarize(samples) {
 
 async function main() {
   const connection = new Connection(MAINNET_RPC_URL, "confirmed");
-  const trades = await fetchTrades();
-  const candidates = uniqueOrders(trades);
-  const samples = [];
+  const discovery = await discoverOrdersFromChain(connection);
+  if (discovery.candidates.length === 0) {
+    throw new Error(
+      `No DFlow Open UserOrder events found after scanning ${discovery.scannedSignatures} program signatures`,
+    );
+  }
 
-  for (const trade of candidates) {
+  const samples = [];
+  for (const seed of discovery.candidates) {
     try {
-      samples.push(await collectOrder(connection, trade));
+      samples.push(await collectOrder(connection, seed));
     } catch (error) {
       samples.push({
-        feed: {
-          orderAccount: trade.orderAccount,
-          wallet: trade.wallet ?? null,
-          fillRecipient: trade.fillRecipient ?? null,
-          refundRecipient: trade.refundRecipient ?? null,
-          inputMint: trade.inputMint ?? null,
-          outputMint: trade.outputMint ?? null,
-          inputAmount: String(trade.inputAmount ?? ""),
-          outputAmount: String(trade.outputAmount ?? ""),
-          transactionSignature: trade.transactionSignature ?? null,
-        },
-        collectionError: error instanceof Error ? error.message : String(error),
+        seed,
+        collectionError:
+          error instanceof Error ? error.message : String(error),
       });
     }
   }
 
+  const completeSamples = samples.filter((sample) => !sample.collectionError);
   const dataset = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     collectedAt: new Date().toISOString(),
     dflowProgram: DFLOW_PM.toBase58(),
     source: {
-      metadataApi: DFLOW_METADATA_API_URL,
+      kind: "solana-mainnet-rpc-only",
       rpc: MAINNET_RPC_URL,
-      feedTradeCount: trades.length,
       sampleLimit: SAMPLE_LIMIT,
+      programScanLimit: PROGRAM_SCAN_LIMIT,
+      programSignaturePage: PROGRAM_SIGNATURE_PAGE,
       txLimitPerOrder: TX_LIMIT_PER_ORDER,
     },
-    summary: summarize(samples.filter((sample) => !sample.collectionError)),
+    summary: summarize(completeSamples, discovery.scannedSignatures),
     samples,
   };
 
   fs.mkdirSync(new URL("../artifacts/", import.meta.url), { recursive: true });
   fs.writeFileSync(OUTPUT, JSON.stringify(dataset, null, 2) + "\n");
 
-  console.log("DFlow mainnet observation summary");
+  console.log("DFlow mainnet on-chain evidence summary");
   console.log(JSON.stringify(dataset.summary, null, 2));
   console.log(`dataset=${OUTPUT}`);
 }
