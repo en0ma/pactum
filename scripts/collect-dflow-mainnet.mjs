@@ -235,10 +235,16 @@ function dflowInstructions(tx, keys) {
     )
     .map((ix) => {
       const data = instructionDataBytes(ix);
+      const rawAccounts = instructionAccountIndexes(ix).map(
+        (index) => keys[index] ?? null,
+      );
+      const accounts =
+        rawAccounts[0] === DFLOW_PM.toBase58()
+          ? rawAccounts.slice(1)
+          : rawAccounts;
       return {
-        accounts: instructionAccountIndexes(ix).map(
-          (index) => keys[index] ?? null,
-        ),
+        accounts,
+        rawAccounts,
         dataHex: data ? data.toString("hex") : null,
         event: data ? parseUserOrderEvent(data) : null,
       };
