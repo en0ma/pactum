@@ -7,7 +7,6 @@ use anchor_spl::token_interface::{
     Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount, TokenInterface,
 };
 
-#[cfg(feature = "test-hooks")]
 use solana_cpi::invoke;
 use solana_instruction::{AccountMeta, Instruction};
 
@@ -18,8 +17,8 @@ pub mod state;
 
 use error::PactumError;
 use state::{
-    ApprovedMarket, KeeperAuthorization, MarketExposure, PendingDflowOrder, UserPosition,
-    VaultConfig,
+    ApprovedMarket, KeeperAuthorization, MarketExposure, MarketKeeperAuthorization,
+    MarketRegistry, PendingDflowOrder, RegistryMarket, UserPosition, VaultConfig,
 };
 
 declare_id!("AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw");
@@ -121,6 +120,102 @@ pub mod pactum_vault {
             market_ledger: ctx.accounts.approved_market.market_ledger,
             enabled,
         });
+        Ok(())
+    }
+
+    pub fn authorize_market_keeper(ctx: Context<AuthorizeMarketKeeper>) -> Result<()> {
+        let authorization = &mut ctx.accounts.market_keeper_authorization;
+        authorization.keeper = ctx.accounts.market_keeper.key();
+        authorization.bump = ctx.bumps.market_keeper_authorization;
+
+        emit!(MarketKeeperChanged {
+            keeper: authorization.keeper,
+            authorized: true,
+        });
+
+        Ok(())
+    }
+
+    pub fn revoke_market_keeper(ctx: Context<RevokeMarketKeeper>) -> Result<()> {
+        emit!(MarketKeeperChanged {
+            keeper: ctx.accounts.market_keeper_authorization.keeper,
+            authorized: false,
+        });
+        Ok(())
+    }
+
+    pub fn update_market_registry(
+        ctx: Context<UpdateMarketRegistry>,
+        previous: RegistryMarket,
+        current: RegistryMarket,
+        next: RegistryMarket,
+        sequence: u64,
+        observed_slot: u64,
+    ) -> Result<()> {
+        require!(previous.start_ts < previous.end_ts, PactumError::InvalidMarketRegistry);
+        require!(current.start_ts < current.end_ts, PactumError::InvalidMarketRegistry);
+        require!(next.start_ts < next.end_ts, PactumError::InvalidMarketRegistry);
+        require!(
+            previous.end_ts <= current.start_ts && current.end_ts <= next.start_ts,
+            PactumError::InvalidMarketRegistry
+        );
+
+        let clock = Clock::get()?;
+        require!(observed_slot <= clock.slot, PactumError::InvalidMarketRegistry);
+        require!(
+            current.start_ts <= clock.unix_timestamp && clock.unix_timestamp < current.end_ts,
+            PactumError::MarketRegistryStale
+        );
+
+        let registry = &mut ctx.accounts.market_registry;
+        if registry.sequence != 0 {
+            require!(sequence > registry.sequence, PactumError::InvalidMarketRegistry);
+        }
+
+        require_keys_eq!(
+            current.market_ledger,
+            ctx.accounts.current_market_ledger.key(),
+            PactumError::MarketRegistryMismatch
+        );
+        require_keys_eq!(
+            current.settlement_vault,
+            ctx.accounts.current_market_usdc.key(),
+            PactumError::MarketRegistryMismatch
+        );
+        require_keys_eq!(
+            current.yes_mint,
+            ctx.accounts.current_yes_mint.key(),
+            PactumError::MarketRegistryMismatch
+        );
+        require_keys_eq!(
+            current.no_mint,
+            ctx.accounts.current_no_mint.key(),
+            PactumError::MarketRegistryMismatch
+        );
+
+        registry.previous = previous;
+        registry.current = current;
+        registry.next = next;
+        registry.sequence = sequence;
+        registry.observed_slot = observed_slot;
+        registry.bump = ctx.bumps.market_registry;
+
+        let approved = &mut ctx.accounts.current_approved_market;
+        approved.market_ledger = current.market_ledger;
+        approved.settlement_vault = current.settlement_vault;
+        approved.yes_mint = current.yes_mint;
+        approved.no_mint = current.no_mint;
+        approved.enabled = true;
+        approved.bump = ctx.bumps.current_approved_market;
+
+        emit!(MarketRegistryUpdated {
+            sequence,
+            observed_slot,
+            previous_market: previous.market_ledger,
+            current_market: current.market_ledger,
+            next_market: next.market_ledger,
+        });
+
         Ok(())
     }
 
@@ -1172,6 +1267,125 @@ pub struct SetMarketEnabled<'info> {
 }
 
 #[derive(Accounts)]
+pub struct AuthorizeMarketKeeper<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = config.config_bump,
+        has_one = admin
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    /// CHECK: market keeper need not sign when authorization is created.
+    pub market_keeper: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        seeds = [b"market_keeper", config.key().as_ref(), market_keeper.key().as_ref()],
+        bump,
+        space = 8 + MarketKeeperAuthorization::LEN
+    )]
+    pub market_keeper_authorization: Account<'info, MarketKeeperAuthorization>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RevokeMarketKeeper<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = config.config_bump,
+        has_one = admin
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    /// CHECK: key is bound into the market-keeper authorization PDA.
+    pub market_keeper: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        close = admin,
+        seeds = [b"market_keeper", config.key().as_ref(), market_keeper.key().as_ref()],
+        bump = market_keeper_authorization.bump,
+        constraint = market_keeper_authorization.keeper == market_keeper.key()
+    )]
+    pub market_keeper_authorization: Account<'info, MarketKeeperAuthorization>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateMarketRegistry<'info> {
+    #[account(mut)]
+    pub market_keeper: Signer<'info>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = config.config_bump
+    )]
+    pub config: Account<'info, VaultConfig>,
+
+    #[account(
+        seeds = [b"market_keeper", config.key().as_ref(), market_keeper.key().as_ref()],
+        bump = market_keeper_authorization.bump,
+        constraint = market_keeper_authorization.keeper == market_keeper.key()
+    )]
+    pub market_keeper_authorization: Account<'info, MarketKeeperAuthorization>,
+
+    #[account(
+        init_if_needed,
+        payer = market_keeper,
+        seeds = [b"market_registry"],
+        bump,
+        space = 8 + MarketRegistry::LEN
+    )]
+    pub market_registry: Account<'info, MarketRegistry>,
+
+    /// CHECK: verified DFlow-owned current market ledger.
+    #[account(
+        mut,
+        constraint = *current_market_ledger.owner == dflow::DFLOW_PREDICTION_MARKETS
+    )]
+    pub current_market_ledger: UncheckedAccount<'info>,
+
+    #[account(
+        token::mint = usdc_mint,
+        token::authority = current_market_ledger
+    )]
+    pub current_market_usdc: Account<'info, TokenAccount>,
+
+    #[account(
+        constraint = *current_yes_mint.to_account_info().owner
+            == dflow::prediction_v1::TOKEN_2022_PROGRAM
+    )]
+    pub current_yes_mint: InterfaceAccount<'info, InterfaceMint>,
+
+    #[account(
+        constraint = *current_no_mint.to_account_info().owner
+            == dflow::prediction_v1::TOKEN_2022_PROGRAM
+    )]
+    pub current_no_mint: InterfaceAccount<'info, InterfaceMint>,
+
+    #[account(address = dflow::USDC_MINT)]
+    pub usdc_mint: Account<'info, Mint>,
+
+    #[account(
+        init_if_needed,
+        payer = market_keeper,
+        seeds = [b"market", current_market_ledger.key().as_ref()],
+        bump,
+        space = 8 + ApprovedMarket::LEN
+    )]
+    pub current_approved_market: Account<'info, ApprovedMarket>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct AuthorizeKeeper<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
@@ -1976,6 +2190,21 @@ pub struct RiskLimitsChanged {
 pub struct MarketChanged {
     pub market_ledger: Pubkey,
     pub enabled: bool,
+}
+
+#[event]
+pub struct MarketKeeperChanged {
+    pub keeper: Pubkey,
+    pub authorized: bool,
+}
+
+#[event]
+pub struct MarketRegistryUpdated {
+    pub sequence: u64,
+    pub observed_slot: u64,
+    pub previous_market: Pubkey,
+    pub current_market: Pubkey,
+    pub next_market: Pubkey,
 }
 
 #[event]
