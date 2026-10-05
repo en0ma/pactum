@@ -1623,6 +1623,12 @@ pub struct ExecuteTrade<'info> {
     pub keeper_authorization: Box<Account<'info, KeeperAuthorization>>,
 
     #[account(
+        seeds = [b"market_registry"],
+        bump = market_registry.bump
+    )]
+    pub market_registry: Box<Account<'info, MarketRegistry>>,
+
+    #[account(
         seeds = [b"market", approved_market.market_ledger.as_ref()],
         bump = approved_market.bump
     )]
