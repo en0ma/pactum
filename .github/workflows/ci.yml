@@ -117,9 +117,9 @@ jobs:
 
       - name: Collect DFlow mainnet evidence
         env:
-          DFLOW_DATASET_SAMPLE_LIMIT: "40"
-          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "1200"
-          DFLOW_DATASET_TX_LIMIT_PER_ORDER: "32"
+          DFLOW_DATASET_SAMPLE_LIMIT: "20"
+          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "600"
+          DFLOW_DATASET_TX_LIMIT_PER_ORDER: "24"
         run: node scripts/collect-dflow-mainnet.mjs
 
       - name: Upload DFlow mainnet evidence
