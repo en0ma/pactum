@@ -580,6 +580,43 @@ async function collectOrder(connection, seed) {
       })),
   );
 
+  const userRefundCandidates = refundCandidates.filter(
+    (item) =>
+      item.account === seed.sourceUsdc ||
+      (item.owner && item.owner === seed.user),
+  );
+
+  const lifecycleEvents = txs.flatMap((tx) =>
+    tx.dflowInstructions
+      .filter((ix) => ix.parsedEvent)
+      .map((ix) => ({
+        signature: tx.signature,
+        slot: tx.slot,
+        blockTime: tx.blockTime,
+        event: ix.parsedEvent,
+      }))
+      .filter(
+        (item) =>
+          !item.event.userOrder ||
+          item.event.userOrder === seed.orderAccount,
+      ),
+  );
+
+  const action10 = txs.flatMap((tx) =>
+    tx.dflowInstructions
+      .filter((ix) => ix.actionU64 === "16")
+      .map((ix) => ({
+        signature: tx.signature,
+        slot: tx.slot,
+        blockTime: tx.blockTime,
+        signers: tx.signers,
+        accounts: ix.accounts,
+        dataHex: ix.dataHex,
+        dataLength: ix.dataLength,
+        tokenBalanceDeltas: tx.tokenBalanceDeltas,
+      })),
+  );
+
   let account = null;
   if (accountInfo) {
     const data = Buffer.from(accountInfo.data);
@@ -615,6 +652,9 @@ async function collectOrder(connection, seed) {
     source,
     outputCandidates,
     refundCandidates,
+    userRefundCandidates,
+    lifecycleEvents,
+    action10,
     account,
     transactions: txs,
   };
@@ -641,6 +681,8 @@ function summarize(samples, scannedSignatures) {
   let fullRefundOrders = 0;
   let partialFillOrders = 0;
   let exactQuotedFillOrders = 0;
+  let ordersWithAction10 = 0;
+  const lifecycleEventCounts = {};
 
   for (const sample of samples) {
     if (sample.account?.dataLength === 344) live344 += 1;
@@ -653,7 +695,12 @@ function summarize(samples, scannedSignatures) {
     }
 
     const outputs = sample.outputCandidates ?? [];
-    const refunds = sample.refundCandidates ?? [];
+    const refunds = sample.userRefundCandidates ?? [];
+    if ((sample.action10 ?? []).length > 0) ordersWithAction10 += 1;
+    for (const item of sample.lifecycleEvents ?? []) {
+      const name = item.event?.typeName ?? "unknown";
+      lifecycleEventCounts[name] = (lifecycleEventCounts[name] ?? 0) + 1;
+    }
     if (outputs.length > 0) ordersWithOutcomeCandidate += 1;
     if (refunds.length > 0) ordersWithRefundCandidate += 1;
 
@@ -710,6 +757,8 @@ function summarize(samples, scannedSignatures) {
     fullRefundOrders,
     partialFillOrders,
     exactQuotedFillOrders,
+    ordersWithAction10,
+    lifecycleEventCounts,
     actionCounts,
   };
 }
