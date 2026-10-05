@@ -99,7 +99,7 @@ function decodeBase58(text) {
 
 function parseUserOrderEvent(data) {
   if (
-    data.length < 162 ||
+    data.length < 168 ||
     data[0] !== 0xf0 ||
     !data.subarray(1, 8).every((byte) => byte === 0) ||
     data[8] !== 0x02
@@ -107,6 +107,8 @@ function parseUserOrderEvent(data) {
     return null;
   }
 
+  // Current mainnet UserOrder events include a 6-byte event header after subtype.
+  const base = 16;
   return {
     type: data[9],
     typeName:
@@ -119,13 +121,13 @@ function parseUserOrderEvent(data) {
             : data[9] === 4
               ? "revert"
               : "unknown",
-    userOrder: new PublicKey(data.subarray(10, 42)).toBase58(),
-    inputMint: new PublicKey(data.subarray(42, 74)).toBase58(),
-    inputAmount: data.readBigUInt64LE(74).toString(),
-    outputMint: new PublicKey(data.subarray(82, 114)).toBase58(),
-    outputAmount: data.readBigUInt64LE(114).toString(),
-    feeMint: new PublicKey(data.subarray(122, 154)).toBase58(),
-    feeAmount: data.readBigUInt64LE(154).toString(),
+    userOrder: new PublicKey(data.subarray(base, base + 32)).toBase58(),
+    inputMint: new PublicKey(data.subarray(base + 32, base + 64)).toBase58(),
+    inputAmount: data.readBigUInt64LE(base + 64).toString(),
+    outputMint: new PublicKey(data.subarray(base + 72, base + 104)).toBase58(),
+    outputAmount: data.readBigUInt64LE(base + 104).toString(),
+    feeMint: new PublicKey(data.subarray(base + 112, base + 144)).toBase58(),
+    feeAmount: data.readBigUInt64LE(base + 144).toString(),
   };
 }
 
@@ -682,6 +684,8 @@ function summarize(samples, scannedSignatures) {
   let partialFillOrders = 0;
   let exactQuotedFillOrders = 0;
   let ordersWithAction10 = 0;
+  let action10SelectedMintMatchesFill = 0;
+  let action10SelectedMintMismatchesFill = 0;
   const lifecycleEventCounts = {};
 
   for (const sample of samples) {
@@ -696,7 +700,18 @@ function summarize(samples, scannedSignatures) {
 
     const outputs = sample.outputCandidates ?? [];
     const refunds = sample.userRefundCandidates ?? [];
-    if ((sample.action10 ?? []).length > 0) ordersWithAction10 += 1;
+    if ((sample.action10 ?? []).length > 0) {
+      ordersWithAction10 += 1;
+      const selectedMint = sample.action10[0]?.accounts?.[8] ?? null;
+      const observedMints = new Set(outputs.map((item) => item.mint));
+      if (selectedMint && observedMints.size > 0) {
+        if (observedMints.has(selectedMint)) {
+          action10SelectedMintMatchesFill += 1;
+        } else {
+          action10SelectedMintMismatchesFill += 1;
+        }
+      }
+    }
     for (const item of sample.lifecycleEvents ?? []) {
       const name = item.event?.typeName ?? "unknown";
       lifecycleEventCounts[name] = (lifecycleEventCounts[name] ?? 0) + 1;
@@ -758,6 +773,8 @@ function summarize(samples, scannedSignatures) {
     partialFillOrders,
     exactQuotedFillOrders,
     ordersWithAction10,
+    action10SelectedMintMatchesFill,
+    action10SelectedMintMismatchesFill,
     lifecycleEventCounts,
     actionCounts,
   };
