@@ -794,15 +794,28 @@ async function main() {
   const delegatedProbeSignerEscalation = delegatedProbeLogs.some((line) =>
     line.toLowerCase().includes("signer privilege escalated"),
   );
+  const dflowInvokeIndex = delegatedProbeLogs.findIndex((line) =>
+    line.includes(`Program ${DFLOW_PM.toBase58()} invoke [2]`),
+  );
+  const dflowTokenLogs =
+    dflowInvokeIndex >= 0 ? delegatedProbeLogs.slice(dflowInvokeIndex + 1) : [];
+  const delegatedSourceTransferInvoked = dflowTokenLogs.some((line) =>
+    line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} invoke [3]`),
+  );
+  const delegatedSourceTransferSucceeded = dflowTokenLogs.some((line) =>
+    line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} success`),
+  );
 
   if (
     !delegatedProbeReachedDflow ||
     !delegatedProbeApproved ||
+    !delegatedSourceTransferInvoked ||
+    !delegatedSourceTransferSucceeded ||
     delegatedProbeSignerEscalation
   ) {
     console.error(delegatedProbeLogs.join("\n"));
     throw new Error(
-      "Keeper-delegated OpenUserOrder probe did not reach DFlow with an exact SPL delegate allowance",
+      "Keeper-delegated OpenUserOrder probe did not prove DFlow can spend PDA-owned USDC through the exact SPL delegate",
     );
   }
 
