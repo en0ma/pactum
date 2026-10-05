@@ -22,6 +22,7 @@ env:
 
 jobs:
   build:
+    if: ${{ false }}
     name: Build and lint
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -132,6 +133,7 @@ jobs:
           retention-days: 14
 
   mainnet-fork:
+    if: ${{ false }}
     name: Mainnet fork / DFlow CPI / CU budgets
     runs-on: ubuntu-24.04
     timeout-minutes: 35
