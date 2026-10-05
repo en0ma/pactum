@@ -142,8 +142,15 @@ The captured OpenUserOrder account order was:
 10. classic SPL Token program
 11. System Program
 
-Pactum supplies VaultAuthorityPDA in the three repeated user/authority signer
-roles with `invoke_signed`.
+The original Pactum probe supplied VaultAuthorityPDA in the three repeated
+user/authority signer roles and proved signer propagation with
+`invoke_signed`.
+
+PR #5 now tests and uses a stricter identity/custody split: the authorized
+strategy keeper occupies the three DFlow user/signer roles, while the
+PDA-owned USDC vault grants that keeper an exact temporary SPL delegate
+allowance inside `execute_trade`. Pactum revokes the allowance before the
+instruction can commit.
 
 ## User-order account
 
@@ -252,50 +259,75 @@ Observed redeem data:
 The captured redeem burned `5000000` outcome atoms and returned
 `5000000` USDC atoms.
 
-## Keeper-signer delegation research
+## Strategy keeper, market keeper, and custody
 
-DFlow's public cookbook discovers prediction markets with the Metadata API and
-requests a trade transaction with the selected outcome mint plus
-`userPublicKey`.
+Pactum uses two independent off-chain keepers.
 
-Pactum treats this as the supported discovery boundary:
+The strategy keeper keeps its existing behavior:
 
-- the keeper can use DFlow APIs to find the current active market
-- the keeper can choose either approved outcome side
-- Pactum must validate the selected market and execution constraints on-chain
-- DFlow API responses are not settlement proof
+- discover the current DFlow market through DFlow APIs
+- choose YES or NO
+- request the quote/order data
+- submit the keeper-signed Pactum transaction
 
-Pactum is also testing a separate identity/custody model:
+The Pactum market keeper independently discovers the rolling market window and
+publishes it to the `MarketRegistry` PDA:
+
+- previous market
+- current market
+- next market
+- each market ledger
+- each USDC settlement vault
+- each YES and NO mint
+- each start and end timestamp
+- monotonic registry sequence and observed slot
+
+The market keeper cannot move vault funds. A registry update verifies the
+current ledger is owned by the DFlow Prediction Markets program, verifies the
+USDC settlement vault is controlled by that ledger, and verifies the current
+YES and NO mints are Token-2022 mints.
+
+`execute_trade` keeps the bot-supplied market and strategy inputs. Before
+vault risk checks, Pactum requires those inputs to agree with the independently
+published current registry entry and the approved on-chain DFlow accounts.
+
+The execution authority model is:
 
 ```text
-keeper EOA                 VaultAuthorityPDA
-    |                              |
-    | DFlow signer/user            | owns pooled USDC
-    |                              |
-    +-------- temporary SPL -------+
-              delegation
-                    |
-                    v
-           DFlow OpenUserOrder
+strategy keeper (DFlow user / signer)
+              |
+              | keeper-signed Pactum transaction
+              v
+        Pactum execute_trade
+              |
+              | validate registry + DFlow accounts + risk
+              |
+VaultAuthorityPDA owns vault_usdc
+              |
+              | SPL approve exact input_amount
+              v
+      strategy keeper delegate
+              |
+              | DFlow OpenUserOrder CPI
+              v
+             DFlow
+              |
+              | Pactum revokes delegate before commit
+              v
+        no standing authority
 ```
 
-The test-only probe grants the keeper an exact SPL delegate allowance inside
-one Pactum instruction, calls DFlow with the keeper in the observed repeated
-user/signer roles, and revokes the allowance before return. A failed CPI rolls
-back the complete transaction.
+The delegated amount must equal the validated DFlow input amount. If the DFlow
+CPI or revoke fails, Solana transaction atomicity rolls back the temporary
+approval.
 
-This does not change production `execute_trade`. Production remains
-PDA-signed until observation proves all of these properties:
-
-1. DFlow accepts the keeper as the verified trader while spending a
-   PDA-owned USDC account through SPL delegation.
-2. The delegation can be limited to exactly the validated input amount.
-3. The asynchronous outcome destination can be fixed to VaultAuthorityPDA
-   custody instead of the keeper.
-4. Cancel/Revert refunds return to a PDA-owned account.
-5. The selected DFlow output mint can be authenticated on-chain.
-6. The keeper has no standing transfer authority after `execute_trade`
-   returns.
+DFlow documents a `destinationWallet` concept and exposes `fillRecipient`
+and `refundRecipient` in its on-chain trade feed. The mainnet probe therefore
+correlates live 344-byte user-order accounts with the documented output mint,
+fill recipient, and refund recipient. PR #5 is not merge-ready until multiple
+live samples establish one stable offset for each field. Production validation
+must then require the selected output mint and both asynchronous custody routes
+to resolve to Pactum-controlled accounts.
 
 The read-only `npm run inspect:dflow-order` tool compares current DFlow
 `/order` transactions with and without a separate `destinationWallet`.
