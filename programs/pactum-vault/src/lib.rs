@@ -2,7 +2,7 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
+use anchor_spl::token::{self, Approve, Mint, Revoke, Token, TokenAccount, TransferChecked};
 use anchor_spl::token_interface::{
     Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount, TokenInterface,
 };
@@ -931,6 +931,79 @@ pub mod pactum_vault {
         .map_err(Into::into)
     }
 
+    /// CI-only probe for a KYC-style keeper signer spending from PDA-owned USDC.
+    ///
+    /// Pactum grants the keeper an exact SPL delegate allowance inside this
+    /// instruction, calls DFlow with the keeper in the three user/signer roles,
+    /// then revokes the allowance before returning. Any CPI failure rolls the
+    /// complete transaction back, including the temporary delegation.
+    #[cfg(feature = "test-hooks")]
+    pub fn probe_dflow_open_order_keeper_delegate(
+        ctx: Context<ProbeDflowOpenOrderKeeperDelegate>,
+        order_data: [u8; dflow::prediction_v1::OPEN_USER_ORDER_DATA_LEN],
+        delegate_amount: u64,
+    ) -> Result<()> {
+        let bump = [ctx.bumps.probe_authority];
+        let authority_seeds: &[&[u8]] = &[b"dflow_open_order_probe", &bump];
+        let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+
+        token::approve(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Approve {
+                    to: ctx.accounts.source_usdc.to_account_info(),
+                    delegate: ctx.accounts.keeper.to_account_info(),
+                    authority: ctx.accounts.probe_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            delegate_amount,
+        )?;
+
+        let ix = Instruction {
+            program_id: dflow::DFLOW_PREDICTION_MARKETS,
+            accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
+                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new(ctx.accounts.market_usdc_account.key(), false),
+                AccountMeta::new(ctx.accounts.order_account.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
+                AccountMeta::new(ctx.accounts.source_usdc.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
+            ],
+            data: order_data.to_vec(),
+        };
+
+        solana_cpi::invoke(
+            &ix,
+            &[
+                ctx.accounts.event_authority.to_account_info(),
+                ctx.accounts.market_ledger.to_account_info(),
+                ctx.accounts.market_usdc_account.to_account_info(),
+                ctx.accounts.order_account.to_account_info(),
+                ctx.accounts.usdc_mint.to_account_info(),
+                ctx.accounts.source_usdc.to_account_info(),
+                ctx.accounts.keeper.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.dflow_program.to_account_info(),
+            ],
+        )?;
+
+        token::revoke(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Revoke {
+                source: ctx.accounts.source_usdc.to_account_info(),
+                authority: ctx.accounts.probe_authority.to_account_info(),
+            },
+            signer_seeds,
+        ))
+    }
+
     /// CI-only proof that Solana accepts a Pactum PDA as an inner DFlow signer.
     /// DFlow is expected to reject the deliberately invalid payload after entry.
     #[cfg(feature = "test-hooks")]
@@ -1822,6 +1895,50 @@ pub struct ProbeDflowOpenOrderPda<'info> {
     #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
     pub dflow_program: UncheckedAccount<'info>,
 }
+#[cfg(feature = "test-hooks")]
+#[derive(Accounts)]
+pub struct ProbeDflowOpenOrderKeeperDelegate<'info> {
+    pub keeper: Signer<'info>,
+
+    /// CHECK: deterministic CI-only PDA that owns the source USDC account.
+    #[account(seeds = [b"dflow_open_order_probe"], bump)]
+    pub probe_authority: UncheckedAccount<'info>,
+
+    /// CHECK: fixed DFlow event authority.
+    #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
+    pub event_authority: UncheckedAccount<'info>,
+
+    /// CHECK: forked DFlow market ledger supplied by the test fixture.
+    #[account(mut)]
+    pub market_ledger: UncheckedAccount<'info>,
+
+    /// CHECK: forked DFlow market USDC account supplied by the test fixture.
+    #[account(mut)]
+    pub market_usdc_account: UncheckedAccount<'info>,
+
+    /// CHECK: candidate DFlow order account. DFlow may reject it after CPI entry.
+    #[account(mut)]
+    pub order_account: UncheckedAccount<'info>,
+
+    /// CHECK: canonical mainnet USDC mint.
+    #[account(address = dflow::USDC_MINT)]
+    pub usdc_mint: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        token::mint = usdc_mint,
+        token::authority = probe_authority
+    )]
+    pub source_usdc: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: fixed DFlow prediction-market program.
+    #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
+    pub dflow_program: UncheckedAccount<'info>,
+}
+
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
 pub struct ProbeDflowPdaSignedCpi<'info> {
