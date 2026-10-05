@@ -637,6 +637,10 @@ function summarize(samples, scannedSignatures) {
   let sourceOwnerDiffersFromOpenUser = 0;
   let ordersWithOutcomeCandidate = 0;
   let ordersWithRefundCandidate = 0;
+  let fillRecipientOwnerDiffersFromOpenUser = 0;
+  let fullRefundOrders = 0;
+  let partialFillOrders = 0;
+  let exactQuotedFillOrders = 0;
 
   for (const sample of samples) {
     if (sample.account?.dataLength === 344) live344 += 1;
@@ -647,8 +651,45 @@ function summarize(samples, scannedSignatures) {
     ) {
       sourceOwnerDiffersFromOpenUser += 1;
     }
-    if (sample.outputCandidates?.length > 0) ordersWithOutcomeCandidate += 1;
-    if (sample.refundCandidates?.length > 0) ordersWithRefundCandidate += 1;
+
+    const outputs = sample.outputCandidates ?? [];
+    const refunds = sample.refundCandidates ?? [];
+    if (outputs.length > 0) ordersWithOutcomeCandidate += 1;
+    if (refunds.length > 0) ordersWithRefundCandidate += 1;
+
+    if (
+      outputs.some(
+        (item) =>
+          item.owner &&
+          sample.seed.user &&
+          item.owner !== sample.seed.user,
+      )
+    ) {
+      fillRecipientOwnerDiffersFromOpenUser += 1;
+    }
+
+    const userRefund = refunds
+      .filter(
+        (item) =>
+          item.owner === sample.seed.user ||
+          item.account === sample.seed.sourceUsdc,
+      )
+      .reduce((sum, item) => sum + BigInt(item.delta), 0n);
+    const outputAmount = outputs.reduce(
+      (sum, item) => sum + BigInt(item.delta),
+      0n,
+    );
+    const inputAmount = BigInt(sample.seed.inputAmount);
+    const quotedOutput = BigInt(sample.seed.quotedOutputAmount);
+
+    if (outputAmount === 0n && userRefund === inputAmount) {
+      fullRefundOrders += 1;
+    } else if (outputAmount > 0n && userRefund > 0n) {
+      partialFillOrders += 1;
+    }
+    if (outputAmount === quotedOutput && outputAmount > 0n) {
+      exactQuotedFillOrders += 1;
+    }
 
     for (const tx of sample.transactions ?? []) {
       for (const ix of tx.dflowInstructions ?? []) {
@@ -663,8 +704,12 @@ function summarize(samples, scannedSignatures) {
     sampledOrders: samples.length,
     live344OrderAccounts: live344,
     sourceOwnerDiffersFromOpenUser,
+    fillRecipientOwnerDiffersFromOpenUser,
     ordersWithOutcomeCandidate,
     ordersWithRefundCandidate,
+    fullRefundOrders,
+    partialFillOrders,
+    exactQuotedFillOrders,
     actionCounts,
   };
 }
