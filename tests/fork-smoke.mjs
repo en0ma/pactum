@@ -847,17 +847,22 @@ async function main() {
   const delegatedSourceTransferSucceeded = dflowTokenLogs.some((line) =>
     line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} success`),
   );
+  const delegatedProbeRevoked = dflowTokenLogs.some((line) =>
+    line.includes("Instruction: Revoke"),
+  );
 
   if (
+    delegatedProbeSim.value.err ||
     !delegatedProbeReachedDflow ||
     !delegatedProbeApproved ||
     !delegatedSourceTransferInvoked ||
     !delegatedSourceTransferSucceeded ||
+    !delegatedProbeRevoked ||
     delegatedProbeSignerEscalation
   ) {
     console.error(delegatedProbeLogs.join("\n"));
     throw new Error(
-      "Keeper-delegated OpenUserOrder probe did not prove DFlow can spend PDA-owned USDC through the exact SPL delegate",
+      "Keeper-delegated OpenUserOrder probe did not complete DFlow spend and revoke with the exact SPL delegate",
     );
   }
 
