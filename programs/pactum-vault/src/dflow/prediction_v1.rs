@@ -107,7 +107,7 @@ pub fn validate_open_order_keys(
     keys: &OpenOrderKeys,
     market: &ApprovedMarket,
     vault_usdc: Pubkey,
-    vault_authority: Pubkey,
+    expected_token_authority: Pubkey,
 ) -> Result<()> {
     require!(market.enabled, PactumError::MarketDisabled);
     require_keys_eq!(
@@ -137,7 +137,7 @@ pub fn validate_open_order_keys(
     );
     require_keys_eq!(
         keys.token_authority,
-        vault_authority,
+        expected_token_authority,
         PactumError::InvalidDflowAccounts
     );
     require_keys_eq!(
