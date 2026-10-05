@@ -1440,14 +1440,14 @@ pub struct UpdateMarketRegistry<'info> {
         seeds = [b"config"],
         bump = config.config_bump
     )]
-    pub config: Account<'info, VaultConfig>,
+    pub config: Box<Account<'info, VaultConfig>>,
 
     #[account(
         seeds = [b"market_keeper", config.key().as_ref(), market_keeper.key().as_ref()],
         bump = market_keeper_authorization.bump,
         constraint = market_keeper_authorization.keeper == market_keeper.key()
     )]
-    pub market_keeper_authorization: Account<'info, MarketKeeperAuthorization>,
+    pub market_keeper_authorization: Box<Account<'info, MarketKeeperAuthorization>>,
 
     #[account(
         init_if_needed,
@@ -1456,7 +1456,7 @@ pub struct UpdateMarketRegistry<'info> {
         bump,
         space = 8 + MarketRegistry::LEN
     )]
-    pub market_registry: Account<'info, MarketRegistry>,
+    pub market_registry: Box<Account<'info, MarketRegistry>>,
 
     /// CHECK: verified DFlow-owned current market ledger.
     #[account(
@@ -1469,22 +1469,22 @@ pub struct UpdateMarketRegistry<'info> {
         token::mint = usdc_mint,
         token::authority = current_market_ledger
     )]
-    pub current_market_usdc: Account<'info, TokenAccount>,
+    pub current_market_usdc: Box<Account<'info, TokenAccount>>,
 
     #[account(
         constraint = *current_yes_mint.to_account_info().owner
             == dflow::prediction_v1::TOKEN_2022_PROGRAM
     )]
-    pub current_yes_mint: InterfaceAccount<'info, InterfaceMint>,
+    pub current_yes_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
 
     #[account(
         constraint = *current_no_mint.to_account_info().owner
             == dflow::prediction_v1::TOKEN_2022_PROGRAM
     )]
-    pub current_no_mint: InterfaceAccount<'info, InterfaceMint>,
+    pub current_no_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
 
     #[account(address = dflow::USDC_MINT)]
-    pub usdc_mint: Account<'info, Mint>,
+    pub usdc_mint: Box<Account<'info, Mint>>,
 
     #[account(
         init_if_needed,
@@ -1493,7 +1493,7 @@ pub struct UpdateMarketRegistry<'info> {
         bump,
         space = 8 + ApprovedMarket::LEN
     )]
-    pub current_approved_market: Account<'info, ApprovedMarket>,
+    pub current_approved_market: Box<Account<'info, ApprovedMarket>>,
 
     pub system_program: Program<'info, System>,
 }
