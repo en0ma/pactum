@@ -184,7 +184,6 @@ async function cloneAccountValueToSurfpool(pubkey, account) {
       owner: account.owner,
       executable: account.executable,
       data: Buffer.from(base64Data, "base64").toString("hex"),
-      rentEpoch: account.rentEpoch,
     },
   ]);
 }
