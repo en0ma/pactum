@@ -47,6 +47,7 @@ pub mod pactum_vault {
         config.min_liquidity_buffer_usdc = min_liquidity_buffer_usdc;
         config.open_exposure_usdc = 0;
         config.total_shares = 0;
+        config.open_positions = 0;
 
         emit!(VaultInitialized {
             admin: config.admin,
@@ -147,7 +148,8 @@ pub mod pactum_vault {
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
         require!(
-            ctx.accounts.config.open_exposure_usdc == 0,
+            ctx.accounts.config.open_exposure_usdc == 0
+                && ctx.accounts.config.open_positions == 0,
             PactumError::ExposureOpen
         );
 
@@ -206,7 +208,8 @@ pub mod pactum_vault {
     pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
         require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
         require!(
-            ctx.accounts.config.open_exposure_usdc == 0,
+            ctx.accounts.config.open_exposure_usdc == 0
+                && ctx.accounts.config.open_positions == 0,
             PactumError::ExposureOpen
         );
         require!(
@@ -495,6 +498,7 @@ pub mod pactum_vault {
             .ok_or(PactumError::MathOverflow)?;
 
         let exposure = &mut ctx.accounts.market_exposure;
+        let creates_live_position = exposure.outcome_atoms == 0;
         if exposure.market_ledger == Pubkey::default() {
             exposure.market_ledger = ctx.accounts.approved_market.market_ledger;
             exposure.outcome_mint = ctx.accounts.outcome_mint.key();
@@ -520,6 +524,15 @@ pub mod pactum_vault {
             .outcome_atoms
             .checked_add(total_filled_outcome_atoms)
             .ok_or(PactumError::MathOverflow)?;
+
+        if creates_live_position {
+            ctx.accounts.config.open_positions = ctx
+                .accounts
+                .config
+                .open_positions
+                .checked_add(1)
+                .ok_or(PactumError::MathOverflow)?;
+        }
 
         emit!(DflowOrderFinalized {
             keeper: ctx.accounts.keeper.key(),
@@ -622,7 +635,8 @@ pub mod pactum_vault {
         )?;
 
         require!(
-            ctx.accounts.market_exposure.outcome_atoms > 0,
+            ctx.accounts.market_exposure.outcome_atoms > 0
+                && ctx.accounts.config.open_positions > 0,
             PactumError::InvalidMarketExposure
         );
         math::validate_redeem_position(
@@ -703,6 +717,12 @@ pub mod pactum_vault {
             .ok_or(PactumError::MathOverflow)?;
         ctx.accounts.market_exposure.cost_basis_usdc = 0;
         ctx.accounts.market_exposure.outcome_atoms = 0;
+        ctx.accounts.config.open_positions = ctx
+            .accounts
+            .config
+            .open_positions
+            .checked_sub(1)
+            .ok_or(PactumError::MathOverflow)?;
 
         emit!(MarketRedeemed {
             market_ledger: ctx.accounts.market_ledger.key(),
@@ -764,6 +784,12 @@ pub mod pactum_vault {
             .open_exposure_usdc
             .checked_add(cost_basis_usdc)
             .ok_or(PactumError::MathOverflow)?;
+        ctx.accounts.config.open_positions = ctx
+            .accounts
+            .config
+            .open_positions
+            .checked_add(1)
+            .ok_or(PactumError::MathOverflow)?;
 
         emit!(MarketExposureInitialized {
             market_ledger: exposure.market_ledger,
@@ -799,6 +825,12 @@ pub mod pactum_vault {
             .config
             .open_exposure_usdc
             .checked_add(cost_basis_usdc)
+            .ok_or(PactumError::MathOverflow)?;
+        ctx.accounts.config.open_positions = ctx
+            .accounts
+            .config
+            .open_positions
+            .checked_add(1)
             .ok_or(PactumError::MathOverflow)?;
 
         Ok(())
