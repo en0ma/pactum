@@ -252,6 +252,56 @@ Observed redeem data:
 The captured redeem burned `5000000` outcome atoms and returned
 `5000000` USDC atoms.
 
+## Keeper-signer delegation research
+
+DFlow's public cookbook discovers prediction markets with the Metadata API and
+requests a trade transaction with the selected outcome mint plus
+`userPublicKey`.
+
+Pactum treats this as the supported discovery boundary:
+
+- the keeper can use DFlow APIs to find the current active market
+- the keeper can choose either approved outcome side
+- Pactum must validate the selected market and execution constraints on-chain
+- DFlow API responses are not settlement proof
+
+Pactum is also testing a separate identity/custody model:
+
+```text
+keeper EOA                 VaultAuthorityPDA
+    |                              |
+    | DFlow signer/user            | owns pooled USDC
+    |                              |
+    +-------- temporary SPL -------+
+              delegation
+                    |
+                    v
+           DFlow OpenUserOrder
+```
+
+The test-only probe grants the keeper an exact SPL delegate allowance inside
+one Pactum instruction, calls DFlow with the keeper in the observed repeated
+user/signer roles, and revokes the allowance before return. A failed CPI rolls
+back the complete transaction.
+
+This does not change production `execute_trade`. Production remains
+PDA-signed until observation proves all of these properties:
+
+1. DFlow accepts the keeper as the verified trader while spending a
+   PDA-owned USDC account through SPL delegation.
+2. The delegation can be limited to exactly the validated input amount.
+3. The asynchronous outcome destination can be fixed to VaultAuthorityPDA
+   custody instead of the keeper.
+4. Cancel/Revert refunds return to a PDA-owned account.
+5. The selected DFlow output mint can be authenticated on-chain.
+6. The keeper has no standing transfer authority after `execute_trade`
+   returns.
+
+The read-only `npm run inspect:dflow-order` tool compares current DFlow
+`/order` transactions with and without a separate `destinationWallet`.
+It resolves address lookup tables and reports signer, writable, and program
+account relationships. It does not sign or submit transactions.
+
 ## Fork-test policy
 
 Use real mainnet state when the test validates a DFlow relationship.
