@@ -16,7 +16,15 @@ const PROGRAM_SIGNATURE_PAGE = Number(
   process.env.DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE ?? "100",
 );
 const PROGRAM_SCAN_LIMIT = Number(
-  process.env.DFLOW_DATASET_PROGRAM_SCAN_LIMIT ?? "1200",
+  process.env.DFLOW_DATASET_PROGRAM_SCAN_LIMIT ?? "15000",
+);
+const SCAN_AFTER_UNIX = Math.floor(
+  new Date(process.env.DFLOW_DATASET_SCAN_AFTER ?? "2026-05-01T00:00:00Z").getTime() /
+    1000,
+);
+const SCAN_BEFORE_UNIX = Math.floor(
+  new Date(process.env.DFLOW_DATASET_SCAN_BEFORE ?? "2026-06-01T00:00:00Z").getTime() /
+    1000,
 );
 const TX_LIMIT_PER_ORDER = Number(
   process.env.DFLOW_DATASET_TX_LIMIT_PER_ORDER ?? "32",
@@ -317,7 +325,9 @@ async function discoverOrdersFromChain(connection) {
   const instructionExamples = [];
   let before;
   let scannedSignatures = 0;
+  let windowSignatures = 0;
   let dflowInstructionCount = 0;
+  let reachedWindow = false;
 
   while (
     scannedSignatures < PROGRAM_SCAN_LIMIT &&
@@ -339,6 +349,25 @@ async function discoverOrdersFromChain(connection) {
 
     for (const item of signatures) {
       scannedSignatures += 1;
+      if (!item.blockTime) continue;
+
+      if (item.blockTime >= SCAN_BEFORE_UNIX) {
+        continue;
+      }
+      if (item.blockTime < SCAN_AFTER_UNIX) {
+        return {
+          candidates: [...orders.values()],
+          scannedSignatures,
+          windowSignatures,
+          dflowInstructionCount,
+          instructionShapes,
+          instructionExamples,
+          reachedWindow,
+        };
+      }
+
+      reachedWindow = true;
+      windowSignatures += 1;
       if (item.err) continue;
 
       const tx = await getTransactionWithRetry(connection, item.signature);
@@ -359,7 +388,7 @@ async function discoverOrdersFromChain(connection) {
         ].join("|");
         instructionShapes[shapeKey] = (instructionShapes[shapeKey] ?? 0) + 1;
 
-        if (instructionExamples.length < 100) {
+        if (instructionExamples.length < 200) {
           instructionExamples.push({
             signature: item.signature,
             slot: tx.slot,
@@ -403,7 +432,7 @@ async function discoverOrdersFromChain(connection) {
       }
 
       if (orders.size >= SAMPLE_LIMIT) break;
-      await sleep(150);
+      await sleep(125);
     }
 
     before = signatures.at(-1)?.signature;
@@ -413,9 +442,11 @@ async function discoverOrdersFromChain(connection) {
   return {
     candidates: [...orders.values()],
     scannedSignatures,
+    windowSignatures,
     dflowInstructionCount,
     instructionShapes,
     instructionExamples,
+    reachedWindow,
   };
 }
 
@@ -634,12 +665,16 @@ async function main() {
       sampleLimit: SAMPLE_LIMIT,
       programScanLimit: PROGRAM_SCAN_LIMIT,
       programSignaturePage: PROGRAM_SIGNATURE_PAGE,
+      scanAfterUnix: SCAN_AFTER_UNIX,
+      scanBeforeUnix: SCAN_BEFORE_UNIX,
       txLimitPerOrder: TX_LIMIT_PER_ORDER,
     },
     summary: {
       ...summarize(completeSamples, discovery.scannedSignatures),
       discoveredOpenCandidates: discovery.candidates.length,
       dflowInstructionCount: discovery.dflowInstructionCount,
+      windowSignatures: discovery.windowSignatures,
+      reachedHistoricalWindow: discovery.reachedWindow,
       instructionShapes: discovery.instructionShapes,
     },
     instructionExamples: discovery.instructionExamples,
