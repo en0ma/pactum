@@ -146,5 +146,21 @@ jobs:
           curl -sL https://run.surfpool.run/ | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Collect DFlow mainnet evidence
+        env:
+          DFLOW_API_KEY: ${{ secrets.DFLOW_API_KEY }}
+          DFLOW_DATASET_SAMPLE_LIMIT: "40"
+          DFLOW_DATASET_TX_LIMIT_PER_ORDER: "32"
+        run: node scripts/collect-dflow-mainnet.mjs
+
+      - name: Upload DFlow mainnet evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dflow-mainnet-observations
+          path: artifacts/dflow-mainnet-observations.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Run fork tests
         run: bash scripts/run-fork-ci.sh
