@@ -188,6 +188,31 @@ function allInstructions(tx) {
   ];
 }
 
+function instructionDataBytes(ix) {
+  if (typeof ix.data === "string") {
+    return decodeBase58(ix.data);
+  }
+  if (ix.data instanceof Uint8Array || Buffer.isBuffer(ix.data)) {
+    return Buffer.from(ix.data);
+  }
+  if (Array.isArray(ix.data)) {
+    return Buffer.from(ix.data);
+  }
+  return null;
+}
+
+function instructionAccountIndexes(ix) {
+  if (Array.isArray(ix.accountKeyIndexes)) return ix.accountKeyIndexes;
+  if (Array.isArray(ix.accounts)) return ix.accounts;
+  if (ix.accountKeyIndexes instanceof Uint8Array) {
+    return [...ix.accountKeyIndexes];
+  }
+  if (ix.accounts instanceof Uint8Array) {
+    return [...ix.accounts];
+  }
+  return [];
+}
+
 function dflowInstructions(tx, keys) {
   return allInstructions(tx)
     .filter(
@@ -195,19 +220,16 @@ function dflowInstructions(tx, keys) {
         typeof ix.programIdIndex === "number" &&
         keys[ix.programIdIndex] === DFLOW_PM.toBase58(),
     )
-    .map((ix) => ({
-      accounts: [...(ix.accountKeyIndexes ?? [])].map(
-        (index) => keys[index] ?? null,
-      ),
-      dataHex:
-        typeof ix.data === "string"
-          ? Buffer.from(decodeBase58(ix.data)).toString("hex")
-          : null,
-      event:
-        typeof ix.data === "string"
-          ? parseUserOrderEvent(decodeBase58(ix.data))
-          : null,
-    }));
+    .map((ix) => {
+      const data = instructionDataBytes(ix);
+      return {
+        accounts: instructionAccountIndexes(ix).map(
+          (index) => keys[index] ?? null,
+        ),
+        dataHex: data ? data.toString("hex") : null,
+        event: data ? parseUserOrderEvent(data) : null,
+      };
+    });
 }
 
 function tokenBalanceDeltas(tx, keys) {
