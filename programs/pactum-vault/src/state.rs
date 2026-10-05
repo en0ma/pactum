@@ -12,6 +12,8 @@ pub struct VaultConfig {
     pub min_liquidity_buffer_usdc: u64,
     pub open_exposure_usdc: u64,
     pub total_shares: u64,
+    /// Number of live outcome positions that must settle before shares can move.
+    pub open_positions: u64,
 }
 
 impl VaultConfig {
@@ -24,7 +26,8 @@ impl VaultConfig {
         8 +  // max_total_exposure_usdc
         8 +  // min_liquidity_buffer_usdc
         8 +  // open_exposure_usdc
-        8; // total_shares
+        8 +  // total_shares
+        8; // open_positions
 }
 
 #[account]
