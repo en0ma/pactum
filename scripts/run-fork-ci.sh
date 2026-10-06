@@ -17,7 +17,18 @@ fi
 # Anchor 1.x checks source/program-id consistency. Sync the checked-in
 # placeholder to the ephemeral CI deployment key before building.
 anchor keys sync
-anchor build -- --features test-hooks
+
+for attempt in 1 2 3; do
+  if anchor build -- --features test-hooks; then
+    break
+  fi
+  if [[ "$attempt" -eq 3 ]]; then
+    echo "anchor build failed after ${attempt} attempts" >&2
+    exit 1
+  fi
+  echo "anchor build attempt ${attempt} failed; retrying platform-tools/build setup..." >&2
+  sleep 5
+done
 
 echo "Starting Surfpool mainnet fork..."
 NO_DNA=1 surfpool start   --ci   --daemon   --rpc-url "$MAINNET_RPC_URL"
