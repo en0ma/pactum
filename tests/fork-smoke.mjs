@@ -715,10 +715,19 @@ async function main() {
     openProbeAuthority,
     USDC_MINT,
   );
+  const keeperSourceUsdc = associatedTokenAddress(
+    payer.publicKey,
+    USDC_MINT,
+  );
   await surfpoolRpc("surfnet_setTokenAccount", [
     openProbeAuthority.toBase58(),
     USDC_MINT.toBase58(),
     { amount: 2_000_000, state: "initialized" },
+  ]);
+  await surfpoolRpc("surfnet_setTokenAccount", [
+    payer.publicKey.toBase58(),
+    USDC_MINT.toBase58(),
+    { amount: 0, state: "initialized" },
   ]);
 
   const openProbeOrderAccount = Keypair.generate().publicKey;
@@ -784,8 +793,8 @@ async function main() {
     );
   }
 
-  const delegatedOrderAccount = Keypair.generate().publicKey;
-  const delegatedOpenProbeIx = new TransactionInstruction({
+  const fundedOrderAccount = Keypair.generate().publicKey;
+  const fundedOpenProbeIx = new TransactionInstruction({
     programId: PROGRAM_ID,
     keys: [
       { pubkey: payer.publicKey, isSigner: true, isWritable: false },
@@ -793,76 +802,71 @@ async function main() {
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
       { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: true },
       { pubkey: openProbeMarketUsdc, isSigner: false, isWritable: true },
-      { pubkey: delegatedOrderAccount, isSigner: false, isWritable: true },
+      { pubkey: fundedOrderAccount, isSigner: false, isWritable: true },
       { pubkey: USDC_MINT, isSigner: false, isWritable: false },
       { pubkey: openProbeSourceUsdc, isSigner: false, isWritable: true },
+      { pubkey: keeperSourceUsdc, isSigner: false, isWritable: true },
       { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([
-      anchorDiscriminator("probe_dflow_open_order_keeper_delegate"),
+      anchorDiscriminator("probe_dflow_open_order_keeper_funded"),
       OPEN_ORDER_FIXTURE,
       u64Le(948_096),
     ]),
   });
 
-  const { blockhash: delegatedProbeBlockhash } =
+  const { blockhash: fundedProbeBlockhash } =
     await connection.getLatestBlockhash();
-  const delegatedProbeTx = new Transaction({
+  const fundedProbeTx = new Transaction({
     feePayer: payer.publicKey,
-    recentBlockhash: delegatedProbeBlockhash,
+    recentBlockhash: fundedProbeBlockhash,
   }).add(
     ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
     SystemProgram.transfer({
       fromPubkey: payer.publicKey,
-      toPubkey: delegatedOrderAccount,
+      toPubkey: fundedOrderAccount,
       lamports: 1,
     }),
-    delegatedOpenProbeIx,
+    fundedOpenProbeIx,
   );
-  delegatedProbeTx.sign(payer);
+  fundedProbeTx.sign(payer);
 
-  const delegatedProbeSim = await connection.simulateTransaction(
-    delegatedProbeTx,
-  );
-  const delegatedProbeLogs = delegatedProbeSim.value.logs ?? [];
-  const delegatedProbeReachedDflow = delegatedProbeLogs.some((line) =>
+  const fundedProbeSim = await connection.simulateTransaction(fundedProbeTx);
+  const fundedProbeLogs = fundedProbeSim.value.logs ?? [];
+  const fundedProbeReachedDflow = fundedProbeLogs.some((line) =>
     line.includes(`Program ${DFLOW_PM.toBase58()} invoke [2]`),
   );
-  const delegatedProbeApproved = delegatedProbeLogs.some((line) =>
-    line.includes("Instruction: Approve"),
-  );
-  const delegatedProbeSignerEscalation = delegatedProbeLogs.some((line) =>
+  const fundedProbeSignerEscalation = fundedProbeLogs.some((line) =>
     line.toLowerCase().includes("signer privilege escalated"),
   );
-  const dflowInvokeIndex = delegatedProbeLogs.findIndex((line) =>
+  const fundedTransferObserved = fundedProbeLogs.some((line) =>
+    line.includes("Instruction: Transfer"),
+  );
+  const dflowInvokeIndex = fundedProbeLogs.findIndex((line) =>
     line.includes(`Program ${DFLOW_PM.toBase58()} invoke [2]`),
   );
   const dflowTokenLogs =
-    dflowInvokeIndex >= 0 ? delegatedProbeLogs.slice(dflowInvokeIndex + 1) : [];
-  const delegatedSourceTransferInvoked = dflowTokenLogs.some((line) =>
+    dflowInvokeIndex >= 0 ? fundedProbeLogs.slice(dflowInvokeIndex + 1) : [];
+  const fundedSourceTransferInvoked = dflowTokenLogs.some((line) =>
     line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} invoke [3]`),
   );
-  const delegatedSourceTransferSucceeded = dflowTokenLogs.some((line) =>
+  const fundedSourceTransferSucceeded = dflowTokenLogs.some((line) =>
     line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} success`),
-  );
-  const delegatedProbeRevoked = dflowTokenLogs.some((line) =>
-    line.includes("Instruction: Revoke"),
   );
 
   if (
-    delegatedProbeSim.value.err ||
-    !delegatedProbeReachedDflow ||
-    !delegatedProbeApproved ||
-    !delegatedSourceTransferInvoked ||
-    !delegatedSourceTransferSucceeded ||
-    !delegatedProbeRevoked ||
-    delegatedProbeSignerEscalation
+    fundedProbeSim.value.err ||
+    !fundedProbeReachedDflow ||
+    !fundedTransferObserved ||
+    !fundedSourceTransferInvoked ||
+    !fundedSourceTransferSucceeded ||
+    fundedProbeSignerEscalation
   ) {
-    console.error(delegatedProbeLogs.join("\n"));
+    console.error(fundedProbeLogs.join("\n"));
     throw new Error(
-      "Keeper-delegated OpenUserOrder probe did not complete DFlow spend and revoke with the exact SPL delegate",
+      "Keeper-funded OpenUserOrder probe did not complete the PDA funding and DFlow spend path",
     );
   }
 
