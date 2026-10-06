@@ -2,7 +2,7 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Approve, Mint, Revoke, Token, TokenAccount, TransferChecked};
+use anchor_spl::token::{self, Approve, Mint, Revoke, Token, TokenAccount, Transfer, TransferChecked};
 use anchor_spl::token_interface::{
     Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount, TokenInterface,
 };
@@ -1139,34 +1139,43 @@ pub mod pactum_vault {
         .map_err(Into::into)
     }
 
-    /// CI-only probe for a KYC-style keeper signer spending from PDA-owned USDC.
+    /// CI-only probe for the evidence-backed DFlow funding path.
     ///
-    /// Pactum grants the keeper an exact SPL delegate allowance inside this
-    /// instruction, calls DFlow with the keeper in the three user/signer roles,
-    /// then revokes the allowance before returning. Any CPI failure rolls the
-    /// complete transaction back, including the temporary delegation.
+    /// A Pactum PDA transfers the exact order amount from PDA-owned USDC into
+    /// the keeper's canonical USDC account. DFlow then spends from that
+    /// keeper-owned source while the keeper is the authenticated wallet and
+    /// the Pactum PDA is propagated as both fill and refund recipient signer.
     #[cfg(feature = "test-hooks")]
-    pub fn probe_dflow_open_order_keeper_delegate(
-        ctx: Context<ProbeDflowOpenOrderKeeperDelegate>,
+    pub fn probe_dflow_open_order_keeper_funded(
+        ctx: Context<ProbeDflowOpenOrderKeeperFunded>,
         order_data: [u8; dflow::prediction_v1::OPEN_USER_ORDER_DATA_LEN],
-        delegate_amount: u64,
+        input_amount: u64,
     ) -> Result<()> {
+        require!(input_amount > 0, PactumError::ZeroAmount);
+        require!(ctx.accounts.keeper_usdc.amount == 0, PactumError::InvalidDflowSpend);
+
         let bump = [ctx.bumps.probe_authority];
         let authority_seeds: &[&[u8]] = &[b"dflow_open_order_probe", &bump];
         let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
-        token::approve(
+        token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.key(),
-                Approve {
-                    to: ctx.accounts.source_usdc.to_account_info(),
-                    delegate: ctx.accounts.keeper.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.source_usdc.to_account_info(),
+                    to: ctx.accounts.keeper_usdc.to_account_info(),
                     authority: ctx.accounts.probe_authority.to_account_info(),
                 },
                 signer_seeds,
             ),
-            delegate_amount,
+            input_amount,
         )?;
+
+        ctx.accounts.keeper_usdc.reload()?;
+        require!(
+            ctx.accounts.keeper_usdc.amount == input_amount,
+            PactumError::InvalidDflowSpend
+        );
 
         let ix = Instruction {
             program_id: dflow::DFLOW_PREDICTION_MARKETS,
@@ -1176,17 +1185,17 @@ pub mod pactum_vault {
                 AccountMeta::new(ctx.accounts.market_usdc_account.key(), false),
                 AccountMeta::new(ctx.accounts.order_account.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
-                AccountMeta::new(ctx.accounts.source_usdc.key(), false),
+                AccountMeta::new(ctx.accounts.keeper_usdc.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
-                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
-                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
                 AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
             ],
             data: order_data.to_vec(),
         };
 
-        solana_cpi::invoke(
+        solana_cpi::invoke_signed(
             &ix,
             &[
                 ctx.accounts.event_authority.to_account_info(),
@@ -1194,22 +1203,23 @@ pub mod pactum_vault {
                 ctx.accounts.market_usdc_account.to_account_info(),
                 ctx.accounts.order_account.to_account_info(),
                 ctx.accounts.usdc_mint.to_account_info(),
-                ctx.accounts.source_usdc.to_account_info(),
+                ctx.accounts.keeper_usdc.to_account_info(),
                 ctx.accounts.keeper.to_account_info(),
+                ctx.accounts.probe_authority.to_account_info(),
                 ctx.accounts.token_program.to_account_info(),
                 ctx.accounts.system_program.to_account_info(),
                 ctx.accounts.dflow_program.to_account_info(),
             ],
+            &[authority_seeds],
         )?;
 
-        token::revoke(CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            Revoke {
-                source: ctx.accounts.source_usdc.to_account_info(),
-                authority: ctx.accounts.probe_authority.to_account_info(),
-            },
-            signer_seeds,
-        ))
+        ctx.accounts.keeper_usdc.reload()?;
+        require!(
+            ctx.accounts.keeper_usdc.amount == 0,
+            PactumError::InvalidDflowSpend
+        );
+
+        Ok(())
     }
 
     /// CI-only proof that Solana accepts a Pactum PDA as an inner DFlow signer.
@@ -2230,10 +2240,10 @@ pub struct ProbeDflowOpenOrderPda<'info> {
 }
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
-pub struct ProbeDflowOpenOrderKeeperDelegate<'info> {
+pub struct ProbeDflowOpenOrderKeeperFunded<'info> {
     pub keeper: Signer<'info>,
 
-    /// CHECK: deterministic CI-only PDA that owns the source USDC account.
+    /// CHECK: deterministic CI-only PDA that owns the funding USDC account.
     #[account(seeds = [b"dflow_open_order_probe"], bump)]
     pub probe_authority: UncheckedAccount<'info>,
 
@@ -2249,7 +2259,7 @@ pub struct ProbeDflowOpenOrderKeeperDelegate<'info> {
     #[account(mut)]
     pub market_usdc_account: UncheckedAccount<'info>,
 
-    /// CHECK: candidate DFlow order account. DFlow may reject it after CPI entry.
+    /// CHECK: candidate DFlow order account.
     #[account(mut)]
     pub order_account: UncheckedAccount<'info>,
 
@@ -2263,6 +2273,13 @@ pub struct ProbeDflowOpenOrderKeeperDelegate<'info> {
         token::authority = probe_authority
     )]
     pub source_usdc: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        token::mint = usdc_mint,
+        token::authority = keeper
+    )]
+    pub keeper_usdc: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
