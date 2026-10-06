@@ -15,9 +15,6 @@ import { requireRpcMetric } from "./metric-guard.mjs";
 const RPC_URL = process.env.SURFPOOL_RPC_URL ?? "http://127.0.0.1:8899";
 const MAINNET_RPC_URL =
   process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com";
-const DFLOW_METADATA_API_URL =
-  process.env.DFLOW_METADATA_API_URL ??
-  "https://dev-prediction-markets-api.dflow.net";
 const PROGRAM_ID = new PublicKey(
   process.env.PACTUM_PROGRAM_ID ?? "AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw",
 );
@@ -348,15 +345,22 @@ function parseDflowUserOrderEvent(data) {
     return null;
   }
 
+  const base = 16;
   return {
     type: data[9],
-    userOrder: new PublicKey(data.subarray(10, 42)),
-    inputMint: new PublicKey(data.subarray(42, 74)),
-    inputAmount: data.readBigUInt64LE(74),
-    outputMint: new PublicKey(data.subarray(82, 114)),
-    outputAmount: data.readBigUInt64LE(114),
-    feeMint: new PublicKey(data.subarray(122, 154)),
-    feeAmount: data.readBigUInt64LE(154),
+    userOrder: new PublicKey(data.subarray(base, base + 32)),
+    inputMint: new PublicKey(data.subarray(base + 32, base + 64)),
+    inputAmount: data.readBigUInt64LE(base + 64),
+    outputMint: new PublicKey(data.subarray(base + 72, base + 104)),
+    outputAmount: data.readBigUInt64LE(base + 104),
+    feeMint: new PublicKey(data.subarray(base + 112, base + 144)),
+    feeAmount: data.readBigUInt64LE(base + 144),
+    wallet:
+      data.length >= 200 ? new PublicKey(data.subarray(168, 200)) : null,
+    fillRecipient:
+      data.length >= 232 ? new PublicKey(data.subarray(200, 232)) : null,
+    refundRecipient:
+      data.length >= 264 ? new PublicKey(data.subarray(232, 264)) : null,
   };
 }
 
@@ -381,50 +385,47 @@ function dflowOpenEvents(tx, keys) {
   return events;
 }
 
-async function fetchDflowOnchainTrades() {
-  const headers = {};
-  if (process.env.DFLOW_API_KEY) {
-    headers["x-api-key"] = process.env.DFLOW_API_KEY;
-  }
+async function dflowOnchainTradeOrderAccounts() {
+  const mainnet = new Connection(MAINNET_RPC_URL, "confirmed");
+  const signatures = await mainnet.getSignaturesForAddress(DFLOW_PM, {
+    limit: 500,
+  });
 
-  const response = await fetch(
-    `${DFLOW_METADATA_API_URL}/api/v1/onchain-trades?limit=200`,
-    { headers },
-  );
-  if (!response.ok) {
-    throw new Error(
-      `DFlow onchain-trades request failed: ${response.status} ${await response.text()}`,
-    );
-  }
+  const trades = new Map();
 
-  const body = await response.json();
-  const trades = body?.trades ?? [];
-  if (!Array.isArray(trades) || trades.length === 0) {
-    throw new Error("DFlow onchain-trades feed returned no trades");
-  }
-  return trades;
-}
+  for (const item of signatures) {
+    if (item.err) continue;
 
-function uniqueDflowTradeOrders(trades) {
-  const orders = new Map();
-  for (const trade of trades) {
-    if (
-      typeof trade?.orderAccount !== "string" ||
-      typeof trade?.outputMint !== "string"
-    ) {
-      continue;
+    const tx = await mainnet.getTransaction(item.signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    if (!tx) continue;
+
+    const keys = resolvedMessageKeys(tx);
+    for (const event of dflowOpenEvents(tx, keys)) {
+      const orderAccount = event.userOrder.toBase58();
+      if (trades.has(orderAccount)) continue;
+
+      trades.set(orderAccount, {
+        orderAccount,
+        transactionSignature: item.signature,
+        inputMint: event.inputMint.toBase58(),
+        outputMint: event.outputMint.toBase58(),
+        inputAmount: event.inputAmount.toString(),
+        outputAmount: event.outputAmount.toString(),
+        wallet: event.wallet?.toBase58() ?? null,
+        fillRecipient: event.fillRecipient?.toBase58() ?? null,
+        refundRecipient: event.refundRecipient?.toBase58() ?? null,
+      });
     }
-    if (!orders.has(trade.orderAccount)) {
-      orders.set(trade.orderAccount, trade);
-    }
-  }
-  return [...orders.values()];
-}
 
-async function dflowTradeOrderAccounts(trades) {
-  const orders = uniqueDflowTradeOrders(trades).slice(0, 100);
+    if (trades.size >= 100) break;
+  }
+
+  const orders = [...trades.values()];
   if (orders.length === 0) {
-    throw new Error("DFlow onchain-trades feed had no usable order accounts");
+    throw new Error("recent on-chain DFlow transactions contained no Open events");
   }
 
   const result = await jsonRpc(MAINNET_RPC_URL, "getMultipleAccounts", [
@@ -520,7 +521,7 @@ async function probeDflowTerminalAccountClosure(tradeAccounts) {
 
   if (evidence.length < 2) {
     throw new Error(
-      `DFlow onchain-trades/mainnet correlation found only ${evidence.length} deallocated filled order accounts`,
+      `DFlow on-chain event/account correlation found only ${evidence.length} deallocated filled order accounts`,
     );
   }
 
@@ -1321,8 +1322,7 @@ async function main() {
     throw new Error("terminal refund was not swept back into vault_usdc");
   }
 
-  const dflowTrades = await fetchDflowOnchainTrades();
-  const dflowTradeAccounts = await dflowTradeOrderAccounts(dflowTrades);
+  const dflowTradeAccounts = await dflowOnchainTradeOrderAccounts();
   const dflowUserOrderLayout = await probeDflowUserOrderLayout(dflowTradeAccounts);
   console.log(
     "DFlow user-order layout probe:",
