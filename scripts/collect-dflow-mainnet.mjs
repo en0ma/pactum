@@ -684,8 +684,10 @@ function summarize(samples, scannedSignatures) {
   let partialFillOrders = 0;
   let exactQuotedFillOrders = 0;
   let ordersWithAction10 = 0;
-  let action10SelectedMintMatchesFill = 0;
-  let action10SelectedMintMismatchesFill = 0;
+  let action10FillMintInOutcomePair = 0;
+  let action10FillMintOutsideOutcomePair = 0;
+  let action10RevertMintInOutcomePair = 0;
+  let action10RevertMintOutsideOutcomePair = 0;
   const lifecycleEventCounts = {};
 
   for (const sample of samples) {
@@ -702,13 +704,22 @@ function summarize(samples, scannedSignatures) {
     const refunds = sample.userRefundCandidates ?? [];
     if ((sample.action10 ?? []).length > 0) {
       ordersWithAction10 += 1;
-      const selectedMint = sample.action10[0]?.accounts?.[8] ?? null;
-      const observedMints = new Set(outputs.map((item) => item.mint));
-      if (selectedMint && observedMints.size > 0) {
-        if (observedMints.has(selectedMint)) {
-          action10SelectedMintMatchesFill += 1;
-        } else {
-          action10SelectedMintMismatchesFill += 1;
+      const accounts = sample.action10[0]?.accounts ?? [];
+      const outcomePair = new Set([accounts[7], accounts[8]].filter(Boolean));
+      for (const item of sample.lifecycleEvents ?? []) {
+        if (item.event?.typeName === "fill" && item.event.outputMint) {
+          if (outcomePair.has(item.event.outputMint)) {
+            action10FillMintInOutcomePair += 1;
+          } else {
+            action10FillMintOutsideOutcomePair += 1;
+          }
+        }
+        if (item.event?.typeName === "revert" && item.event.outputMint) {
+          if (outcomePair.has(item.event.outputMint)) {
+            action10RevertMintInOutcomePair += 1;
+          } else {
+            action10RevertMintOutsideOutcomePair += 1;
+          }
         }
       }
     }
@@ -773,8 +784,10 @@ function summarize(samples, scannedSignatures) {
     partialFillOrders,
     exactQuotedFillOrders,
     ordersWithAction10,
-    action10SelectedMintMatchesFill,
-    action10SelectedMintMismatchesFill,
+    action10FillMintInOutcomePair,
+    action10FillMintOutsideOutcomePair,
+    action10RevertMintInOutcomePair,
+    action10RevertMintOutsideOutcomePair,
     lifecycleEventCounts,
     actionCounts,
   };
