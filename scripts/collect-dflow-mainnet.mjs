@@ -510,6 +510,72 @@ async function getTransactionWithRetry(connection, signature) {
   );
 }
 
+async function probeProgramDeployment(connection) {
+  const programAccount = await rpcWithRetry("getAccountInfo DFlow program", () =>
+    connection.getAccountInfo(DFLOW_PM, "confirmed"),
+  );
+  if (!programAccount) {
+    throw new Error("DFlow program account is missing");
+  }
+
+  const programData = Buffer.from(programAccount.data);
+  if (programData.length < 36 || programData.readUInt32LE(0) !== 2) {
+    return {
+      loader: programAccount.owner.toBase58(),
+      programDataAddress: null,
+      lastUpgradeSlot: null,
+      lastUpgradeBlockTime: null,
+      lastUpgradeBlockTimeIso: null,
+      parseStatus: "not-upgradeable-program-state",
+    };
+  }
+
+  const programDataAddress = new PublicKey(programData.subarray(4, 36));
+  const programDataAccount = await rpcWithRetry(
+    "getAccountInfo DFlow programdata",
+    () => connection.getAccountInfo(programDataAddress, "confirmed"),
+  );
+  if (!programDataAccount) {
+    throw new Error("DFlow programdata account is missing");
+  }
+
+  const data = Buffer.from(programDataAccount.data);
+  if (data.length < 12 || data.readUInt32LE(0) !== 3) {
+    return {
+      loader: programAccount.owner.toBase58(),
+      programDataAddress: programDataAddress.toBase58(),
+      lastUpgradeSlot: null,
+      lastUpgradeBlockTime: null,
+      lastUpgradeBlockTimeIso: null,
+      parseStatus: "unexpected-programdata-state",
+    };
+  }
+
+  const lastUpgradeSlot = Number(data.readBigUInt64LE(4));
+  let lastUpgradeBlockTime = null;
+  try {
+    lastUpgradeBlockTime = await rpcWithRetry(
+      `getBlockTime ${lastUpgradeSlot}`,
+      () => connection.getBlockTime(lastUpgradeSlot),
+    );
+  } catch (error) {
+    console.warn(
+      `Unable to resolve DFlow upgrade block time: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  return {
+    loader: programAccount.owner.toBase58(),
+    programDataAddress: programDataAddress.toBase58(),
+    lastUpgradeSlot,
+    lastUpgradeBlockTime,
+    lastUpgradeBlockTimeIso: lastUpgradeBlockTime
+      ? new Date(lastUpgradeBlockTime * 1000).toISOString()
+      : null,
+    parseStatus: "ok",
+  };
+}
+
 async function discoverOrdersFromChain(connection) {
   const startedAt = Date.now();
   const orders = new Map();
@@ -1131,6 +1197,7 @@ function summarize(samples, scannedSignatures) {
 async function main() {
   console.log(`Using configured mainnet RPC host: ${RPC_HOSTNAME}`);
   const connection = new Connection(MAINNET_RPC_URL, "confirmed");
+  const programDeployment = await probeProgramDeployment(connection);
   const discovery = await discoverOrdersFromChain(connection);
   const samples = [];
   for (const seed of discovery.candidates) {
@@ -1150,6 +1217,7 @@ async function main() {
     schemaVersion: 2,
     collectedAt: new Date().toISOString(),
     dflowProgram: DFLOW_PM.toBase58(),
+    programDeployment,
     source: {
       kind: "solana-mainnet-rpc-only",
       rpcHost: RPC_HOSTNAME,
