@@ -349,6 +349,109 @@ function tokenBalanceDeltas(tx, keys) {
     .filter((item) => item.delta !== "0");
 }
 
+function tokenBalanceSnapshots(tx, keys) {
+  const before = new Map(
+    (tx.meta?.preTokenBalances ?? []).map((item) => [
+      `${item.accountIndex}:${item.mint}`,
+      item,
+    ]),
+  );
+  const after = new Map(
+    (tx.meta?.postTokenBalances ?? []).map((item) => [
+      `${item.accountIndex}:${item.mint}`,
+      item,
+    ]),
+  );
+  const joined = new Set([...before.keys(), ...after.keys()]);
+  return [...joined].map((key) => {
+    const pre = before.get(key);
+    const post = after.get(key);
+    const accountIndex = (pre ?? post).accountIndex;
+    const preAmount = BigInt(pre?.uiTokenAmount?.amount ?? "0");
+    const postAmount = BigInt(post?.uiTokenAmount?.amount ?? "0");
+    return {
+      accountIndex,
+      account: keys[accountIndex] ?? null,
+      mint: (pre ?? post).mint,
+      owner: post?.owner ?? pre?.owner ?? null,
+      preAmount: preAmount.toString(),
+      postAmount: postAmount.toString(),
+      delta: (postAmount - preAmount).toString(),
+      programId: post?.programId ?? pre?.programId ?? null,
+    };
+  });
+}
+
+function decodeSplTokenInstruction(programId, data) {
+  if (programId !== SPL_TOKEN_PROGRAM || !data || data.length === 0) return null;
+  const opcode = data[0];
+  const names = {
+    1: "initialize_account",
+    3: "transfer",
+    4: "approve",
+    5: "revoke",
+    9: "close_account",
+    12: "transfer_checked",
+    13: "approve_checked",
+    16: "initialize_account2",
+    18: "initialize_account3",
+  };
+  const decoded = { opcode, name: names[opcode] ?? "unknown" };
+  if ((opcode === 3 || opcode === 4) && data.length >= 9) {
+    decoded.amount = data.readBigUInt64LE(1).toString();
+  }
+  if ((opcode === 12 || opcode === 13) && data.length >= 10) {
+    decoded.amount = data.readBigUInt64LE(1).toString();
+    decoded.decimals = data[9];
+  }
+  return decoded;
+}
+
+function traceInstruction(ix, keys, keyMetas, outerIndex, innerIndex = null) {
+  const data = instructionDataBytes(ix);
+  const indexes = instructionAccountIndexes(ix);
+  const programId =
+    typeof ix.programIdIndex === "number" ? keys[ix.programIdIndex] ?? null : null;
+  return {
+    outerIndex,
+    innerIndex,
+    stackHeight: ix.stackHeight ?? null,
+    programId,
+    accounts: indexes.map((index) => keys[index] ?? null),
+    accountMetas: indexes.map((index) => keyMetas[index] ?? null),
+    dataHex: data ? data.toString("hex") : null,
+    splToken: decodeSplTokenInstruction(programId, data),
+  };
+}
+
+function orderedInstructionTrace(tx, keys) {
+  const keyMetas = resolvedKeyMetas(tx);
+  const outer = tx.transaction.message.compiledInstructions ?? [];
+  const innerByOuter = new Map(
+    (tx.meta?.innerInstructions ?? []).map((group) => [
+      group.index,
+      group.instructions ?? [],
+    ]),
+  );
+  const trace = [];
+  for (let outerIndex = 0; outerIndex < outer.length; outerIndex += 1) {
+    trace.push(traceInstruction(outer[outerIndex], keys, keyMetas, outerIndex));
+    const inner = innerByOuter.get(outerIndex) ?? [];
+    for (let innerIndex = 0; innerIndex < inner.length; innerIndex += 1) {
+      trace.push(
+        traceInstruction(
+          inner[innerIndex],
+          keys,
+          keyMetas,
+          outerIndex,
+          innerIndex,
+        ),
+      );
+    }
+  }
+  return trace;
+}
+
 function signerKeys(tx) {
   const count = tx.transaction.message.header.numRequiredSignatures;
   return tx.transaction.message.staticAccountKeys
@@ -508,6 +611,7 @@ async function discoverOrdersFromChain(connection) {
         if (open.recipientIdentitiesDiverge) {
           divergentOpenInstructions += 1;
           if (divergentOpenExamples.length < 50) {
+            const snapshots = tokenBalanceSnapshots(tx, keys);
             divergentOpenExamples.push({
               signature: item.signature,
               slot: tx.slot,
@@ -515,7 +619,22 @@ async function discoverOrdersFromChain(connection) {
               ...open,
               signers: signerKeys(tx),
               accountMetas: ix.accountMetas,
+              sourceAccountSnapshot:
+                snapshots.find(
+                  (entry) =>
+                    entry.account === open.sourceUsdc &&
+                    entry.mint === USDC_MINT,
+                ) ?? null,
+              recipientUsdcSnapshots: snapshots.filter(
+                (entry) =>
+                  entry.mint === USDC_MINT &&
+                  [open.user, open.fillRecipient, open.refundRecipient].includes(
+                    entry.owner,
+                  ),
+              ),
+              tokenBalanceSnapshots: snapshots,
               tokenBalanceDeltas: deltas,
+              instructionTrace: orderedInstructionTrace(tx, keys),
             });
           }
         }
