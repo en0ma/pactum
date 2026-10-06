@@ -943,6 +943,18 @@ async function main() {
     PROGRAM_ID,
   );
 
+  for (const pubkey of [pendingOrder, marketExposure]) {
+    await surfpoolRpc("surfnet_setAccount", [
+      pubkey.toBase58(),
+      {
+        lamports: 0,
+        owner: SystemProgram.programId.toBase58(),
+        executable: false,
+        data: "",
+      },
+    ]);
+  }
+
   const initializeVaultIx = new TransactionInstruction({
     programId: PROGRAM_ID,
     keys: [
