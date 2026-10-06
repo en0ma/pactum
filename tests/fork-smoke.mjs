@@ -780,7 +780,7 @@ async function main() {
     keys: [
       { pubkey: openProbeAuthority, isSigner: false, isWritable: false },
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
-      { pubkey: HISTORICAL_OPEN_MARKET_LEDGER, isSigner: false, isWritable: false },
+      { pubkey: HISTORICAL_OPEN_MARKET_LEDGER, isSigner: false, isWritable: true },
       { pubkey: HISTORICAL_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
       { pubkey: openProbeOrderAccount, isSigner: false, isWritable: true },
       { pubkey: USDC_MINT, isSigner: false, isWritable: false },
