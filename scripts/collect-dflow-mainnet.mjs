@@ -12,6 +12,9 @@ if (RPC_HOSTNAME === "api.mainnet-beta.solana.com") {
   );
 }
 const SAMPLE_LIMIT = Number(process.env.DFLOW_DATASET_SAMPLE_LIMIT ?? "40");
+const INSTRUCTION_EXAMPLE_LIMIT = Number(
+  process.env.DFLOW_DATASET_INSTRUCTION_EXAMPLE_LIMIT ?? "1000",
+);
 const PROGRAM_SIGNATURE_PAGE = Number(
   process.env.DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE ?? "100",
 );
@@ -128,6 +131,18 @@ function parseUserOrderEvent(data) {
     outputAmount: data.readBigUInt64LE(base + 104).toString(),
     feeMint: new PublicKey(data.subarray(base + 112, base + 144)).toBase58(),
     feeAmount: data.readBigUInt64LE(base + 144).toString(),
+    identity0:
+      data.length >= 200
+        ? new PublicKey(data.subarray(168, 200)).toBase58()
+        : null,
+    identity1:
+      data.length >= 232
+        ? new PublicKey(data.subarray(200, 232)).toBase58()
+        : null,
+    identity2:
+      data.length >= 264
+        ? new PublicKey(data.subarray(232, 264)).toBase58()
+        : null,
   };
 }
 
@@ -420,7 +435,7 @@ async function discoverOrdersFromChain(connection) {
         ].join("|");
         instructionShapes[shapeKey] = (instructionShapes[shapeKey] ?? 0) + 1;
 
-        if (instructionExamples.length < 200) {
+        if (instructionExamples.length < INSTRUCTION_EXAMPLE_LIMIT) {
           instructionExamples.push({
             signature: item.signature,
             slot: tx.slot,
@@ -689,6 +704,8 @@ function summarize(samples, scannedSignatures) {
   let action10RevertMintInOutcomePair = 0;
   let action10RevertMintOutsideOutcomePair = 0;
   const lifecycleEventCounts = {};
+  let eventsWithRecipientIdentityDivergence = 0;
+  const divergentRecipientEvents = [];
 
   for (const sample of samples) {
     if (sample.account?.dataLength === 344) live344 += 1;
@@ -726,6 +743,22 @@ function summarize(samples, scannedSignatures) {
     for (const item of sample.lifecycleEvents ?? []) {
       const name = item.event?.typeName ?? "unknown";
       lifecycleEventCounts[name] = (lifecycleEventCounts[name] ?? 0) + 1;
+      const identities = [
+        item.event?.identity0,
+        item.event?.identity1,
+        item.event?.identity2,
+      ].filter(Boolean);
+      if (identities.length === 3 && new Set(identities).size > 1) {
+        eventsWithRecipientIdentityDivergence += 1;
+        if (divergentRecipientEvents.length < 25) {
+          divergentRecipientEvents.push({
+            signature: item.signature,
+            typeName: name,
+            userOrder: item.event?.userOrder ?? null,
+            identities,
+          });
+        }
+      }
     }
     if (outputs.length > 0) ordersWithOutcomeCandidate += 1;
     if (refunds.length > 0) ordersWithRefundCandidate += 1;
@@ -789,6 +822,8 @@ function summarize(samples, scannedSignatures) {
     action10RevertMintInOutcomePair,
     action10RevertMintOutsideOutcomePair,
     lifecycleEventCounts,
+    eventsWithRecipientIdentityDivergence,
+    divergentRecipientEvents,
     actionCounts,
   };
 }
@@ -826,6 +861,7 @@ async function main() {
       startBeforeSignature: START_BEFORE_SIGNATURE ?? null,
       txLimitPerOrder: TX_LIMIT_PER_ORDER,
       maxRuntimeMs: MAX_RUNTIME_MS,
+      instructionExampleLimit: INSTRUCTION_EXAMPLE_LIMIT,
     },
     summary: {
       ...summarize(completeSamples, discovery.scannedSignatures),
