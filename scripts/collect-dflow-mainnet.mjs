@@ -524,6 +524,9 @@ async function discoverOrdersFromChain(connection) {
   let totalOpenInstructions = 0;
   let divergentOpenInstructions = 0;
   const divergentOpenExamples = [];
+  let openEventCount = 0;
+  let usdcInputOpenEventCount = 0;
+  const openEventExamples = [];
   let reachedWindow = false;
 
   while (
@@ -575,6 +578,9 @@ async function discoverOrdersFromChain(connection) {
           totalOpenInstructions,
           divergentOpenInstructions,
           divergentOpenExamples,
+          openEventCount,
+          usdcInputOpenEventCount,
+          openEventExamples,
           reachedWindow,
           oldestSignature,
           oldestBlockTime,
@@ -590,6 +596,40 @@ async function discoverOrdersFromChain(connection) {
       const keys = resolvedKeys(tx);
       const dflowIxs = dflowInstructions(tx, keys);
       const deltas = tokenBalanceDeltas(tx, keys);
+
+      for (const eventIx of dflowIxs.filter((candidate) => candidate.event?.typeName === "open")) {
+        openEventCount += 1;
+        if (eventIx.event.inputMint === USDC_MINT) {
+          usdcInputOpenEventCount += 1;
+        }
+        if (openEventExamples.length < 100) {
+          openEventExamples.push({
+            signature: item.signature,
+            slot: tx.slot,
+            blockTime: tx.blockTime,
+            event: eventIx.event,
+            signers: signerKeys(tx),
+            siblingDflowInstructions: dflowIxs
+              .filter((candidate) => candidate !== eventIx)
+              .map((candidate) => {
+                const candidateData = candidate.dataHex
+                  ? Buffer.from(candidate.dataHex, "hex")
+                  : null;
+                return {
+                  dataLength: candidateData?.length ?? null,
+                  actionU64:
+                    candidateData && candidateData.length >= 8
+                      ? readU64LE(candidateData, 0)?.toString()
+                      : null,
+                  dataHex: candidate.dataHex,
+                  accounts: candidate.accounts,
+                  accountMetas: candidate.accountMetas,
+                };
+              }),
+            tokenBalanceDeltas: deltas,
+          });
+        }
+      }
 
       for (const ix of dflowIxs) {
         dflowInstructionCount += 1;
@@ -706,6 +746,9 @@ async function discoverOrdersFromChain(connection) {
     totalOpenInstructions,
     divergentOpenInstructions,
     divergentOpenExamples,
+    openEventCount,
+    usdcInputOpenEventCount,
+    openEventExamples,
     reachedWindow,
     oldestSignature,
     oldestBlockTime,
@@ -1092,6 +1135,9 @@ async function main() {
       totalOpenInstructions: discovery.totalOpenInstructions,
       divergentOpenInstructions: discovery.divergentOpenInstructions,
       divergentOpenExamples: discovery.divergentOpenExamples,
+      openEventCount: discovery.openEventCount,
+      usdcInputOpenEventCount: discovery.usdcInputOpenEventCount,
+      openEventExamples: discovery.openEventExamples,
       divergentOpenSourceCanonicalAtaCount:
         discovery.divergentOpenExamples.filter(
           (item) => item.sourceIsCanonicalWalletUsdcAta,
