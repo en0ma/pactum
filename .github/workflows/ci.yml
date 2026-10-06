@@ -112,6 +112,10 @@ jobs:
             start_before: ""
             scan_after: "2026-09-01T00:00:00Z"
             scan_before: "2026-10-07T00:00:00Z"
+          - window: summer
+            start_before: ""
+            scan_after: "2026-07-01T00:00:00Z"
+            scan_before: "2026-09-01T00:00:00Z"
           - window: june
             start_before: "5SvpxZ2G5vGq76epubFM4VmM6ZF9kFm5fTJ5WQvhX6GpEG2Q4vtv6JdUnc8SkRDyPrC8TPfoqHHn82NgVqnahGBx"
             scan_after: "2026-06-01T00:00:00Z"
