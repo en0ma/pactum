@@ -166,7 +166,6 @@ jobs:
     env:
       MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
       PACTUM_DFLOW_OPEN_PROBE_CU_BUDGET: "140000"
-      PACTUM_DFLOW_ARCH_EVIDENCE_ONLY: "1"
 
     steps:
       - uses: actions/checkout@v4
