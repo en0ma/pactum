@@ -404,11 +404,13 @@ async function discoverOrdersFromChain(connection) {
   let oldestBlockTime = null;
   let windowSignatures = 0;
   let dflowInstructionCount = 0;
+  let totalOpenInstructions = 0;
+  let divergentOpenInstructions = 0;
+  const divergentOpenExamples = [];
   let reachedWindow = false;
 
   while (
     scannedSignatures < PROGRAM_SCAN_LIMIT &&
-    orders.size < SAMPLE_LIMIT &&
     Date.now() - startedAt < MAX_RUNTIME_MS
   ) {
     const signatures = await rpcWithRetry(
@@ -453,6 +455,9 @@ async function discoverOrdersFromChain(connection) {
           dflowInstructionCount,
           instructionShapes,
           instructionExamples,
+          totalOpenInstructions,
+          divergentOpenInstructions,
+          divergentOpenExamples,
           reachedWindow,
           oldestSignature,
           oldestBlockTime,
@@ -499,6 +504,22 @@ async function discoverOrdersFromChain(connection) {
         const open = classifyOpenInstruction(ix);
         if (!open) continue;
 
+        totalOpenInstructions += 1;
+        if (open.recipientIdentitiesDiverge) {
+          divergentOpenInstructions += 1;
+          if (divergentOpenExamples.length < 50) {
+            divergentOpenExamples.push({
+              signature: item.signature,
+              slot: tx.slot,
+              blockTime: tx.blockTime,
+              ...open,
+              signers: signerKeys(tx),
+              accountMetas: ix.accountMetas,
+              tokenBalanceDeltas: deltas,
+            });
+          }
+        }
+
         const sourceDelta = deltas.find(
           (delta) =>
             delta.account === open.sourceUsdc &&
@@ -510,7 +531,9 @@ async function discoverOrdersFromChain(connection) {
           sourceDelta &&
           -BigInt(sourceDelta.delta) === BigInt(open.inputAmount);
 
-        if (!orders.has(open.orderAccount)) {
+        const shouldRetain =
+          open.recipientIdentitiesDiverge || orders.size < SAMPLE_LIMIT;
+        if (shouldRetain && !orders.has(open.orderAccount)) {
           orders.set(open.orderAccount, {
             ...open,
             openSignature: item.signature,
@@ -526,7 +549,6 @@ async function discoverOrdersFromChain(connection) {
         }
       }
 
-      if (orders.size >= SAMPLE_LIMIT) break;
       await sleep(125);
     }
 
@@ -541,6 +563,9 @@ async function discoverOrdersFromChain(connection) {
     dflowInstructionCount,
     instructionShapes,
     instructionExamples,
+    totalOpenInstructions,
+    divergentOpenInstructions,
+    divergentOpenExamples,
     reachedWindow,
     oldestSignature,
     oldestBlockTime,
@@ -924,6 +949,9 @@ async function main() {
     summary: {
       ...summarize(completeSamples, discovery.scannedSignatures),
       discoveredOpenCandidates: discovery.candidates.length,
+      totalOpenInstructions: discovery.totalOpenInstructions,
+      divergentOpenInstructions: discovery.divergentOpenInstructions,
+      divergentOpenExamples: discovery.divergentOpenExamples,
       dflowInstructionCount: discovery.dflowInstructionCount,
       windowSignatures: discovery.windowSignatures,
       reachedHistoricalWindow: discovery.reachedWindow,
