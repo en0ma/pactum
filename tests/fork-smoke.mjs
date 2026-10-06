@@ -925,7 +925,7 @@ async function main() {
     PROGRAM_ID,
   );
 
-  for (const pubkey of [marketRegistry, approvedMarket]) {
+  for (const pubkey of [config, vaultUsdc, marketRegistry, approvedMarket]) {
     await surfpoolRpc("surfnet_setAccount", [
       pubkey.toBase58(),
       {
