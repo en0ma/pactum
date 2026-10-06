@@ -887,6 +887,11 @@ async function main() {
     );
   }
 
+  if (process.env.PACTUM_DFLOW_ARCH_EVIDENCE_ONLY === "1") {
+    console.log("DFlow architecture evidence probe completed");
+    return;
+  }
+
   const [config] = PublicKey.findProgramAddressSync(
     [Buffer.from("config")],
     PROGRAM_ID,
