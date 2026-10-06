@@ -157,6 +157,56 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+
+  dflow-cpi-evidence:
+    name: DFlow CPI architecture evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    env:
+      MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+      PACTUM_DFLOW_OPEN_PROBE_CU_BUDGET: "140000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+          components: rustfmt
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Solana/Agave
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/solana-foundation/anchor avm --force
+          rustup toolchain install 1.91.0 --profile minimal
+          RUSTUP_TOOLCHAIN=1.91.0 avm install ${ANCHOR_VERSION} --from-source
+          avm use ${ANCHOR_VERSION}
+          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+
+      - name: Install Surfpool
+        run: |
+          curl -sL https://run.surfpool.run/ | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run DFlow CPI architecture probe
+        run: bash scripts/run-fork-ci.sh
+
   mainnet-fork:
     if: ${{ false }}
     name: Mainnet fork / DFlow CPI / CU budgets
