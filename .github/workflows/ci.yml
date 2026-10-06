@@ -136,9 +136,9 @@ jobs:
 
       - name: Collect DFlow mainnet evidence
         env:
-          DFLOW_DATASET_SAMPLE_LIMIT: "75"
+          DFLOW_DATASET_SAMPLE_LIMIT: "25"
           DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE: "1000"
-          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "5000"
+          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "12000"
           DFLOW_DATASET_START_BEFORE_SIGNATURE: ${{ matrix.start_before }}
           DFLOW_DATASET_SCAN_AFTER: ${{ matrix.scan_after }}
           DFLOW_DATASET_SCAN_BEFORE: ${{ matrix.scan_before }}
