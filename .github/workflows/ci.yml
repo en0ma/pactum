@@ -99,9 +99,27 @@ jobs:
           fi
 
   dflow-evidence:
-    name: DFlow mainnet evidence
+    name: DFlow evidence (${{ matrix.window }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - window: recent
+            start_before: ""
+            scan_after: "2026-09-01T00:00:00Z"
+            scan_before: "2026-10-07T00:00:00Z"
+          - window: june
+            start_before: "5SvpxZ2G5vGq76epubFM4VmM6ZF9kFm5fTJ5WQvhX6GpEG2Q4vtv6JdUnc8SkRDyPrC8TPfoqHHn82NgVqnahGBx"
+            scan_after: "2026-06-01T00:00:00Z"
+            scan_before: "2026-07-01T00:00:00Z"
+          - window: may
+            start_before: "5fJ6d48HuUfzjjpf7kwVKb8Z4R5bnLNAywriVH2VcwWWLvrbLbeuzqDLw7mjG7oPbknAjgK5z3Gs5XUdUSZYTjZW"
+            scan_after: "2026-05-01T00:00:00Z"
+            scan_before: "2026-06-01T00:00:00Z"
 
     env:
       MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
@@ -118,22 +136,24 @@ jobs:
 
       - name: Collect DFlow mainnet evidence
         env:
-          DFLOW_DATASET_SAMPLE_LIMIT: "50"
+          DFLOW_DATASET_SAMPLE_LIMIT: "75"
           DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE: "1000"
           DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "5000"
-          DFLOW_DATASET_START_BEFORE_SIGNATURE: "5fJ6d48HuUfzjjpf7kwVKb8Z4R5bnLNAywriVH2VcwWWLvrbLbeuzqDLw7mjG7oPbknAjgK5z3Gs5XUdUSZYTjZW"
-          DFLOW_DATASET_SCAN_AFTER: "2026-05-01T00:00:00Z"
-          DFLOW_DATASET_SCAN_BEFORE: "2026-06-01T00:00:00Z"
-          DFLOW_DATASET_TX_LIMIT_PER_ORDER: "8"
+          DFLOW_DATASET_START_BEFORE_SIGNATURE: ${{ matrix.start_before }}
+          DFLOW_DATASET_SCAN_AFTER: ${{ matrix.scan_after }}
+          DFLOW_DATASET_SCAN_BEFORE: ${{ matrix.scan_before }}
+          DFLOW_DATASET_TX_LIMIT_PER_ORDER: "6"
           DFLOW_DATASET_MAX_RUNTIME_MS: "360000"
+          DFLOW_DATASET_INSTRUCTION_EXAMPLE_LIMIT: "1000"
+          DFLOW_DATASET_OUTPUT: artifacts/dflow-mainnet-${{ matrix.window }}.json
         run: node scripts/collect-dflow-mainnet.mjs
 
       - name: Upload DFlow mainnet evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dflow-mainnet-observations
-          path: artifacts/dflow-mainnet-observations.json
+          name: dflow-mainnet-${{ matrix.window }}
+          path: artifacts/dflow-mainnet-${{ matrix.window }}.json
           if-no-files-found: warn
           retention-days: 14
 
