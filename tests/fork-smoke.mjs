@@ -762,7 +762,7 @@ async function main() {
   await surfpoolRpc("surfnet_setTokenAccount", [
     openProbeAuthority.toBase58(),
     USDC_MINT.toBase58(),
-    { amount: 2_000_000, state: "initialized" },
+    { amount: HISTORICAL_OPEN_INPUT_AMOUNT, state: "initialized" },
   ]);
   await surfpoolRpc("surfnet_setTokenAccount", [
     payer.publicKey.toBase58(),
