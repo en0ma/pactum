@@ -306,14 +306,22 @@ async function probeDflowRegistryFixture() {
 }
 
 function resolvedMessageKeys(tx) {
-  const staticKeys = tx.transaction.message.accountKeys ?? [];
+  const message = tx.transaction.message;
+  const staticKeys = message.staticAccountKeys ?? message.accountKeys ?? [];
   const loaded = tx.meta?.loadedAddresses ?? { writable: [], readonly: [] };
-  return [...staticKeys, ...(loaded.writable ?? []), ...(loaded.readonly ?? [])];
+  return [
+    ...staticKeys,
+    ...(loaded.writable ?? []),
+    ...(loaded.readonly ?? []),
+  ].map((key) => (typeof key === "string" ? key : key.toBase58()));
 }
 
 function allCompiledInstructions(tx) {
-  const top = tx.transaction.message.instructions ?? [];
-  const inner = (tx.meta?.innerInstructions ?? []).flatMap((group) => group.instructions ?? []);
+  const message = tx.transaction.message;
+  const top = message.compiledInstructions ?? message.instructions ?? [];
+  const inner = (tx.meta?.innerInstructions ?? []).flatMap(
+    (group) => group.instructions ?? [],
+  );
   return [...top, ...inner];
 }
 
@@ -387,29 +395,31 @@ function dflowOpenEvents(tx, keys) {
 
 async function dflowOnchainTradeOrderAccounts() {
   const mainnet = new Connection(MAINNET_RPC_URL, "confirmed");
-  const signatures = await mainnet.getSignaturesForAddress(DFLOW_PM, {
-    limit: 500,
-  });
+  const evidenceSignatures = [
+    "5QKXrfqC5BRY9QcZWD7GBPTuPAvUEQK3i6zDJkLqHad8FGcSW5LmUkmRYZEWdzmgj7X2aRyemX3hpHq66Ut8qSGC",
+    "3AFCtrZDX6ARUnjo2W3djUBVa2UqDpgM2oGJn2nfs7CKuPkjvAN5Pf6fa5VLDnh7LAVf6enPrSxJBRZ3o5iJFNvy",
+  ];
 
-  const trades = new Map();
-
-  for (const item of signatures) {
-    if (item.err) continue;
-
-    const tx = await mainnet.getTransaction(item.signature, {
+  const trades = [];
+  for (const signature of evidenceSignatures) {
+    const tx = await mainnet.getTransaction(signature, {
       commitment: "confirmed",
       maxSupportedTransactionVersion: 0,
     });
-    if (!tx) continue;
+    if (!tx) {
+      throw new Error(`missing on-chain DFlow evidence transaction ${signature}`);
+    }
 
     const keys = resolvedMessageKeys(tx);
-    for (const event of dflowOpenEvents(tx, keys)) {
-      const orderAccount = event.userOrder.toBase58();
-      if (trades.has(orderAccount)) continue;
+    const events = dflowOpenEvents(tx, keys);
+    if (events.length === 0) {
+      throw new Error(`DFlow evidence transaction ${signature} contained no Open event`);
+    }
 
-      trades.set(orderAccount, {
-        orderAccount,
-        transactionSignature: item.signature,
+    for (const event of events) {
+      trades.push({
+        orderAccount: event.userOrder.toBase58(),
+        transactionSignature: signature,
         inputMint: event.inputMint.toBase58(),
         outputMint: event.outputMint.toBase58(),
         inputAmount: event.inputAmount.toString(),
@@ -419,21 +429,18 @@ async function dflowOnchainTradeOrderAccounts() {
         refundRecipient: event.refundRecipient?.toBase58() ?? null,
       });
     }
-
-    if (trades.size >= 100) break;
   }
 
-  const orders = [...trades.values()];
-  if (orders.length === 0) {
-    throw new Error("recent on-chain DFlow transactions contained no Open events");
-  }
+  const uniqueTrades = [
+    ...new Map(trades.map((trade) => [trade.orderAccount, trade])).values(),
+  ];
 
   const result = await jsonRpc(MAINNET_RPC_URL, "getMultipleAccounts", [
-    orders.map((trade) => trade.orderAccount),
+    uniqueTrades.map((trade) => trade.orderAccount),
     { encoding: "base64", commitment: "confirmed" },
   ]);
 
-  return orders.map((trade, index) => ({
+  return uniqueTrades.map((trade, index) => ({
     trade,
     account: result?.value?.[index] ?? null,
   }));
@@ -1328,15 +1335,26 @@ async function main() {
     "DFlow user-order layout probe:",
     JSON.stringify(dflowUserOrderLayout, null, 2),
   );
+  const dflowIdentityEvidence = dflowTradeAccounts.map(({ trade }) => ({
+    signature: trade.transactionSignature,
+    orderAccount: trade.orderAccount,
+    inputMint: trade.inputMint,
+    outputMint: trade.outputMint,
+    wallet: trade.wallet,
+    fillRecipient: trade.fillRecipient,
+    refundRecipient: trade.refundRecipient,
+  }));
   if (
-    dflowUserOrderLayout.stableOutputMintOffset === null ||
-    dflowUserOrderLayout.stableFillRecipientOffset === null ||
-    dflowUserOrderLayout.stableRefundRecipientOffset === null
+    dflowIdentityEvidence.length < 2 ||
+    dflowIdentityEvidence.some(
+      (item) => !item.wallet || !item.fillRecipient || !item.refundRecipient,
+    )
   ) {
     throw new Error(
-      "DFlow live user-order samples did not establish stable output-mint, fill-recipient, and refund-recipient offsets",
+      "DFlow on-chain Open events did not provide complete wallet/fill/refund identity evidence",
     );
   }
+
   const dflowTerminalClosure =
     await probeDflowTerminalAccountClosure(dflowTradeAccounts);
 
@@ -1386,6 +1404,7 @@ async function main() {
       cuBudget: DFLOW_OPEN_PROBE_CU_BUDGET,
     },
     dflowUserOrderLayout,
+    dflowIdentityEvidence,
     dflowTerminalClosure,
     dflowTerminalLifecycle: {
       outcomeAta: outcomeAta.toBase58(),
