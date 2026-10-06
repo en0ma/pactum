@@ -527,6 +527,9 @@ async function discoverOrdersFromChain(connection) {
   let openEventCount = 0;
   let usdcInputOpenEventCount = 0;
   const openEventExamples = [];
+  let action64InstructionCount = 0;
+  const action64InstructionShapes = {};
+  const action64InstructionExamples = [];
   let reachedWindow = false;
 
   while (
@@ -581,6 +584,9 @@ async function discoverOrdersFromChain(connection) {
           openEventCount,
           usdcInputOpenEventCount,
           openEventExamples,
+          action64InstructionCount,
+          action64InstructionShapes,
+          action64InstructionExamples,
           reachedWindow,
           oldestSignature,
           oldestBlockTime,
@@ -642,6 +648,29 @@ async function discoverOrdersFromChain(connection) {
           `accounts=${ix.accounts.length}`,
         ].join("|");
         instructionShapes[shapeKey] = (instructionShapes[shapeKey] ?? 0) + 1;
+
+        if (actionU64 === "64") {
+          action64InstructionCount += 1;
+          action64InstructionShapes[shapeKey] =
+            (action64InstructionShapes[shapeKey] ?? 0) + 1;
+          if (action64InstructionExamples.length < 100) {
+            action64InstructionExamples.push({
+              signature: item.signature,
+              slot: tx.slot,
+              blockTime: tx.blockTime,
+              dataLength: data?.length ?? null,
+              actionU64,
+              dataHex: ix.dataHex,
+              accounts: ix.accounts,
+              accountMetas: ix.accountMetas,
+              signers: signerKeys(tx),
+              tokenBalanceDeltas: deltas,
+              siblingEvents: dflowIxs
+                .filter((candidate) => candidate.event)
+                .map((candidate) => candidate.event),
+            });
+          }
+        }
 
         if (instructionExamples.length < INSTRUCTION_EXAMPLE_LIMIT) {
           instructionExamples.push({
@@ -749,6 +778,9 @@ async function discoverOrdersFromChain(connection) {
     openEventCount,
     usdcInputOpenEventCount,
     openEventExamples,
+    action64InstructionCount,
+    action64InstructionShapes,
+    action64InstructionExamples,
     reachedWindow,
     oldestSignature,
     oldestBlockTime,
@@ -1138,6 +1170,9 @@ async function main() {
       openEventCount: discovery.openEventCount,
       usdcInputOpenEventCount: discovery.usdcInputOpenEventCount,
       openEventExamples: discovery.openEventExamples,
+      action64InstructionCount: discovery.action64InstructionCount,
+      action64InstructionShapes: discovery.action64InstructionShapes,
+      action64InstructionExamples: discovery.action64InstructionExamples,
       divergentOpenSourceCanonicalAtaCount:
         discovery.divergentOpenExamples.filter(
           (item) => item.sourceIsCanonicalWalletUsdcAta,
