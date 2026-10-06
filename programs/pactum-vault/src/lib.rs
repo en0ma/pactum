@@ -2,7 +2,9 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Approve, Mint, Revoke, Token, TokenAccount, Transfer, TransferChecked};
+use anchor_spl::token::{
+    self, Approve, Mint, Revoke, Token, TokenAccount, Transfer, TransferChecked,
+};
 use anchor_spl::token_interface::{
     Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount, TokenInterface,
 };
