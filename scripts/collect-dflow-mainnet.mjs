@@ -668,6 +668,7 @@ async function discoverOrdersFromChain(connection) {
               siblingEvents: dflowIxs
                 .filter((candidate) => candidate.event)
                 .map((candidate) => candidate.event),
+              instructionTrace: orderedInstructionTrace(tx, keys),
             });
           }
         }
@@ -750,6 +751,7 @@ async function discoverOrdersFromChain(connection) {
             openBlockTime: tx.blockTime,
             openSigners: signerKeys(tx),
             openAccountMetas: ix.accountMetas,
+            openInstructionTrace: orderedInstructionTrace(tx, keys),
             inputMint: USDC_MINT,
             sourceDebitObserved: sourceDelta?.delta ?? null,
             sourceDebitMatchesEncodedInput: Boolean(debitMatches),
