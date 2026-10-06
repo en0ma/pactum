@@ -887,10 +887,6 @@ async function main() {
     );
   }
 
-  if (process.env.PACTUM_DFLOW_ARCH_EVIDENCE_ONLY === "1") {
-    console.log("DFlow architecture evidence probe completed");
-    return;
-  }
 
   const [config] = PublicKey.findProgramAddressSync(
     [Buffer.from("config")],
@@ -920,6 +916,19 @@ async function main() {
     [Buffer.from("market_registry")],
     PROGRAM_ID,
   );
+
+  for (const pubkey of [marketRegistry, approvedMarket]) {
+    await surfpoolRpc("surfnet_setAccount", [
+      pubkey.toBase58(),
+      {
+        lamports: 0,
+        owner: SystemProgram.programId.toBase58(),
+        executable: false,
+        data: "",
+      },
+    ]);
+  }
+
   const [pendingOrder] = PublicKey.findProgramAddressSync(
     [Buffer.from("pending_order"), config.toBuffer()],
     PROGRAM_ID,
