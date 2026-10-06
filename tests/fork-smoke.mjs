@@ -27,6 +27,13 @@ const DFLOW_EVENT_AUTHORITY = new PublicKey(
 const OPEN_PROBE_MARKET_LEDGER = new PublicKey(
   "5UHoukpeVPQbmSUaAPWnkXEKZMrjSmwTqqaD8eXmvKNn",
 );
+const HISTORICAL_OPEN_MARKET_LEDGER = new PublicKey(
+  "8fXmQHzSTa3DnFLfVHkcTWkgTPEnZ1b1xBeNu2beDKBc",
+);
+const HISTORICAL_OPEN_MARKET_USDC = new PublicKey(
+  "H29a68pevDogHmFRvdDxzGYeA93NuS6v3MQGxo1bFUhi",
+);
+const HISTORICAL_OPEN_INPUT_AMOUNT = 4_994_326;
 const OPEN_PROBE_YES_MINT = new PublicKey(
   "CA7FMbzNTfeR7jkLzF113bBJupKwq98cixaQtc3b3frb",
 );
@@ -47,12 +54,9 @@ const TOKEN_2022_PROGRAM = new PublicKey(
 );
 const FILL_RECONCILE_OUTCOME_MINT = OPEN_PROBE_YES_MINT;
 const OPEN_ORDER_FIXTURE = Buffer.from(
-  "4000000000000000" +
-    "bb267d4554fc60a6" +
-    "590000000000150a" +
-    "80770e0000000000" +
-    "c0d8a70000000000" +
-    "0000000000000000".repeat(5),
+  "4000000000000000dd3a1169ea2257b05900e1010000730516354c0000000000" +
+    "c0fc9b0100000000075998a1357cecfae339ae49f4859416a85e725889b46d0d" +
+    "4df42bd08cd6644e1800000000000000",
   "hex",
 );
 
@@ -690,6 +694,34 @@ async function main() {
   }
 
 
+  const historicalOpenAccounts = await jsonRpc(
+    MAINNET_RPC_URL,
+    "getMultipleAccounts",
+    [
+      [
+        HISTORICAL_OPEN_MARKET_LEDGER.toBase58(),
+        HISTORICAL_OPEN_MARKET_USDC.toBase58(),
+      ],
+      { encoding: "base64", commitment: "confirmed" },
+    ],
+  );
+  if (
+    !historicalOpenAccounts?.value?.[0] ||
+    !historicalOpenAccounts?.value?.[1]
+  ) {
+    throw new Error("historical DFlow Open fixture accounts are unavailable on mainnet");
+  }
+  await Promise.all([
+    cloneAccountValueToSurfpool(
+      HISTORICAL_OPEN_MARKET_LEDGER,
+      historicalOpenAccounts.value[0],
+    ),
+    cloneAccountValueToSurfpool(
+      HISTORICAL_OPEN_MARKET_USDC,
+      historicalOpenAccounts.value[1],
+    ),
+  ]);
+
   const dflowRegistry = await probeDflowRegistryFixture();
   await Promise.all([
     cloneAccountValueToSurfpool(
@@ -748,8 +780,8 @@ async function main() {
     keys: [
       { pubkey: openProbeAuthority, isSigner: false, isWritable: false },
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
-      { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: true },
-      { pubkey: openProbeMarketUsdc, isSigner: false, isWritable: true },
+      { pubkey: HISTORICAL_OPEN_MARKET_LEDGER, isSigner: false, isWritable: false },
+      { pubkey: HISTORICAL_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
       { pubkey: openProbeOrderAccount, isSigner: false, isWritable: true },
       { pubkey: USDC_MINT, isSigner: false, isWritable: false },
       { pubkey: openProbeSourceUsdc, isSigner: false, isWritable: true },
@@ -808,8 +840,8 @@ async function main() {
       { pubkey: payer.publicKey, isSigner: true, isWritable: false },
       { pubkey: openProbeAuthority, isSigner: false, isWritable: false },
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
-      { pubkey: OPEN_PROBE_MARKET_LEDGER, isSigner: false, isWritable: true },
-      { pubkey: openProbeMarketUsdc, isSigner: false, isWritable: true },
+      { pubkey: HISTORICAL_OPEN_MARKET_LEDGER, isSigner: false, isWritable: false },
+      { pubkey: HISTORICAL_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
       { pubkey: fundedOrderAccount, isSigner: false, isWritable: true },
       { pubkey: USDC_MINT, isSigner: false, isWritable: false },
       { pubkey: openProbeSourceUsdc, isSigner: false, isWritable: true },
@@ -821,7 +853,7 @@ async function main() {
     data: Buffer.concat([
       anchorDiscriminator("probe_dflow_open_order_keeper_funded"),
       OPEN_ORDER_FIXTURE,
-      u64Le(948_096),
+      u64Le(HISTORICAL_OPEN_INPUT_AMOUNT),
     ]),
   });
 
