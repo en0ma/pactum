@@ -46,6 +46,9 @@ const DFLOW_PM = new PublicKey(
 );
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+);
 
 const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -183,6 +186,17 @@ function classifyOpenInstruction(ix) {
     quotedOutputAmount: readU64LE(data, 32)?.toString() ?? null,
     dataHex: ix.dataHex,
   };
+}
+
+function canonicalAta(owner, mint, tokenProgram = SPL_TOKEN_PROGRAM) {
+  return PublicKey.findProgramAddressSync(
+    [
+      new PublicKey(owner).toBuffer(),
+      new PublicKey(tokenProgram).toBuffer(),
+      new PublicKey(mint).toBuffer(),
+    ],
+    ASSOCIATED_TOKEN_PROGRAM,
+  )[0].toBase58();
 }
 
 function findOffsets(data, pubkey) {
@@ -612,6 +626,13 @@ async function discoverOrdersFromChain(connection) {
           divergentOpenInstructions += 1;
           if (divergentOpenExamples.length < 50) {
             const snapshots = tokenBalanceSnapshots(tx, keys);
+            const sourceAccountSnapshot =
+              snapshots.find(
+                (entry) =>
+                  entry.account === open.sourceUsdc &&
+                  entry.mint === USDC_MINT,
+              ) ?? null;
+            const expectedWalletUsdcAta = canonicalAta(open.user, USDC_MINT);
             divergentOpenExamples.push({
               signature: item.signature,
               slot: tx.slot,
@@ -619,12 +640,12 @@ async function discoverOrdersFromChain(connection) {
               ...open,
               signers: signerKeys(tx),
               accountMetas: ix.accountMetas,
-              sourceAccountSnapshot:
-                snapshots.find(
-                  (entry) =>
-                    entry.account === open.sourceUsdc &&
-                    entry.mint === USDC_MINT,
-                ) ?? null,
+              expectedWalletUsdcAta,
+              sourceIsCanonicalWalletUsdcAta:
+                open.sourceUsdc === expectedWalletUsdcAta,
+              sourceOwnerMatchesWallet:
+                sourceAccountSnapshot?.owner === open.user,
+              sourceAccountSnapshot,
               recipientUsdcSnapshots: snapshots.filter(
                 (entry) =>
                   entry.mint === USDC_MINT &&
@@ -1071,6 +1092,18 @@ async function main() {
       totalOpenInstructions: discovery.totalOpenInstructions,
       divergentOpenInstructions: discovery.divergentOpenInstructions,
       divergentOpenExamples: discovery.divergentOpenExamples,
+      divergentOpenSourceCanonicalAtaCount:
+        discovery.divergentOpenExamples.filter(
+          (item) => item.sourceIsCanonicalWalletUsdcAta,
+        ).length,
+      divergentOpenSourceNonCanonicalAtaCount:
+        discovery.divergentOpenExamples.filter(
+          (item) => item.sourceIsCanonicalWalletUsdcAta === false,
+        ).length,
+      divergentOpenSourceOwnerMatchesWalletCount:
+        discovery.divergentOpenExamples.filter(
+          (item) => item.sourceOwnerMatchesWallet,
+        ).length,
       dflowInstructionCount: discovery.dflowInstructionCount,
       windowSignatures: discovery.windowSignatures,
       reachedHistoricalWindow: discovery.reachedWindow,
