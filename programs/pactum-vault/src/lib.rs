@@ -1152,7 +1152,10 @@ pub mod pactum_vault {
         input_amount: u64,
     ) -> Result<()> {
         require!(input_amount > 0, PactumError::ZeroAmount);
-        require!(ctx.accounts.keeper_usdc.amount == 0, PactumError::InvalidDflowSpend);
+        require!(
+            ctx.accounts.keeper_usdc.amount == 0,
+            PactumError::InvalidDflowSpend
+        );
 
         let bump = [ctx.bumps.probe_authority];
         let authority_seeds: &[&[u8]] = &[b"dflow_open_order_probe", &bump];
