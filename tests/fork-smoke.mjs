@@ -841,11 +841,16 @@ async function main() {
   const fundedProbeSignerEscalation = fundedProbeLogs.some((line) =>
     line.toLowerCase().includes("signer privilege escalated"),
   );
-  const fundedTransferObserved = fundedProbeLogs.some((line) =>
-    line.includes("Instruction: Transfer"),
-  );
   const dflowInvokeIndex = fundedProbeLogs.findIndex((line) =>
     line.includes(`Program ${DFLOW_PM.toBase58()} invoke [2]`),
+  );
+  const preDflowLogs =
+    dflowInvokeIndex >= 0 ? fundedProbeLogs.slice(0, dflowInvokeIndex) : [];
+  const fundedTransferInvoked = preDflowLogs.some((line) =>
+    line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} invoke [2]`),
+  );
+  const fundedTransferSucceeded = preDflowLogs.some((line) =>
+    line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} success`),
   );
   const dflowTokenLogs =
     dflowInvokeIndex >= 0 ? fundedProbeLogs.slice(dflowInvokeIndex + 1) : [];
@@ -862,7 +867,8 @@ async function main() {
 
   if (
     !fundedProbeReachedDflow ||
-    !fundedTransferObserved ||
+    !fundedTransferInvoked ||
+    !fundedTransferSucceeded ||
     fundedProbeSignerEscalation ||
     (!historicalOpenAbiRejected &&
       (fundedProbeSim.value.err ||
