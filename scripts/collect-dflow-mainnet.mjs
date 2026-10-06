@@ -163,8 +163,8 @@ function classifyOpenInstruction(ix) {
     !ix.accounts[3] ||
     !ix.accounts[5] ||
     !ix.accounts[6] ||
-    ix.accounts[6] !== ix.accounts[7] ||
-    ix.accounts[7] !== ix.accounts[8]
+    !ix.accounts[7] ||
+    !ix.accounts[8]
   ) {
     return null;
   }
@@ -175,6 +175,10 @@ function classifyOpenInstruction(ix) {
     marketUsdcAccount: ix.accounts[2],
     sourceUsdc: ix.accounts[5],
     user: ix.accounts[6],
+    fillRecipient: ix.accounts[7],
+    refundRecipient: ix.accounts[8],
+    recipientIdentitiesDiverge:
+      new Set([ix.accounts[6], ix.accounts[7], ix.accounts[8]]).size > 1,
     inputAmount: readU64LE(data, 24)?.toString() ?? null,
     quotedOutputAmount: readU64LE(data, 32)?.toString() ?? null,
     dataHex: ix.dataHex,
@@ -207,6 +211,41 @@ function resolvedKeys(tx) {
     ...(tx.meta?.loadedAddresses?.writable ?? []).map((key) => key.toBase58()),
     ...(tx.meta?.loadedAddresses?.readonly ?? []).map((key) => key.toBase58()),
   ];
+}
+
+function resolvedKeyMetas(tx) {
+  const message = tx.transaction.message;
+  const staticKeys = message.staticAccountKeys.map((key) => key.toBase58());
+  const required = message.header.numRequiredSignatures;
+  const readonlySigned = message.header.numReadonlySignedAccounts;
+  const readonlyUnsigned = message.header.numReadonlyUnsignedAccounts;
+  const staticCount = staticKeys.length;
+
+  const metas = staticKeys.map((pubkey, index) => {
+    const isSigner = index < required;
+    const isWritable = isSigner
+      ? index < required - readonlySigned
+      : index < staticCount - readonlyUnsigned;
+    return { pubkey, isSigner, isWritable, source: "static" };
+  });
+
+  for (const key of tx.meta?.loadedAddresses?.writable ?? []) {
+    metas.push({
+      pubkey: key.toBase58(),
+      isSigner: false,
+      isWritable: true,
+      source: "lookup-writable",
+    });
+  }
+  for (const key of tx.meta?.loadedAddresses?.readonly ?? []) {
+    metas.push({
+      pubkey: key.toBase58(),
+      isSigner: false,
+      isWritable: false,
+      source: "lookup-readonly",
+    });
+  }
+  return metas;
 }
 
 function allInstructions(tx) {
@@ -244,6 +283,7 @@ function instructionAccountIndexes(ix) {
 }
 
 function dflowInstructions(tx, keys) {
+  const keyMetas = resolvedKeyMetas(tx);
   return allInstructions(tx)
     .filter(
       (ix) =>
@@ -259,8 +299,14 @@ function dflowInstructions(tx, keys) {
         rawAccounts[0] === DFLOW_PM.toBase58()
           ? rawAccounts.slice(1)
           : rawAccounts;
+      const rawIndexes = instructionAccountIndexes(ix);
+      const normalizedIndexes =
+        rawAccounts[0] === DFLOW_PM.toBase58()
+          ? rawIndexes.slice(1)
+          : rawIndexes;
       return {
         accounts,
+        accountMetas: normalizedIndexes.map((index) => keyMetas[index] ?? null),
         rawAccounts,
         dataHex: data ? data.toString("hex") : null,
         event: data ? parseUserOrderEvent(data) : null,
@@ -444,6 +490,7 @@ async function discoverOrdersFromChain(connection) {
             actionU64,
             dataHex: ix.dataHex,
             accounts: ix.accounts,
+            accountMetas: ix.accountMetas,
             signers: signerKeys(tx),
             tokenBalanceDeltas: deltas,
           });
@@ -470,6 +517,7 @@ async function discoverOrdersFromChain(connection) {
             openSlot: tx.slot,
             openBlockTime: tx.blockTime,
             openSigners: signerKeys(tx),
+            openAccountMetas: ix.accountMetas,
             inputMint: USDC_MINT,
             sourceDebitObserved: sourceDelta?.delta ?? null,
             sourceDebitMatchesEncodedInput: Boolean(debitMatches),
@@ -535,6 +583,7 @@ async function collectOrder(connection, seed) {
         const data = ix.dataHex ? Buffer.from(ix.dataHex, "hex") : null;
         return {
           accounts: ix.accounts,
+          accountMetas: ix.accountMetas,
           dataHex: ix.dataHex,
           dataLength: data?.length ?? null,
           actionU64:
@@ -692,6 +741,9 @@ function summarize(samples, scannedSignatures) {
   const actionCounts = {};
   let live344 = 0;
   let sourceOwnerDiffersFromOpenUser = 0;
+  let openRecipientIdentitiesDiverge = 0;
+  let openFillRecipientDiffersFromUser = 0;
+  let openRefundRecipientDiffersFromUser = 0;
   let ordersWithOutcomeCandidate = 0;
   let ordersWithRefundCandidate = 0;
   let fillRecipientOwnerDiffersFromOpenUser = 0;
@@ -716,6 +768,9 @@ function summarize(samples, scannedSignatures) {
     ) {
       sourceOwnerDiffersFromOpenUser += 1;
     }
+    if (sample.seed.recipientIdentitiesDiverge) openRecipientIdentitiesDiverge += 1;
+    if (sample.seed.fillRecipient !== sample.seed.user) openFillRecipientDiffersFromUser += 1;
+    if (sample.seed.refundRecipient !== sample.seed.user) openRefundRecipientDiffersFromUser += 1;
 
     const outputs = sample.outputCandidates ?? [];
     const refunds = sample.userRefundCandidates ?? [];
@@ -810,6 +865,9 @@ function summarize(samples, scannedSignatures) {
     sampledOrders: samples.length,
     live344OrderAccounts: live344,
     sourceOwnerDiffersFromOpenUser,
+    openRecipientIdentitiesDiverge,
+    openFillRecipientDiffersFromUser,
+    openRefundRecipientDiffersFromUser,
     fillRecipientOwnerDiffersFromOpenUser,
     ordersWithOutcomeCandidate,
     ordersWithRefundCandidate,
