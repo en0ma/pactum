@@ -12,6 +12,9 @@ pub const FILL_USER_ORDER_ACTION: u64 = 0x41;
 pub const REDEEM_MARKET_OUTCOME_ACTION: u64 = 0x58;
 
 pub const OPEN_USER_ORDER_DATA_LEN: usize = 80;
+pub const OPEN_USER_ORDER_SIDE_OFFSET: usize = 16;
+pub const OPEN_USER_ORDER_YES: u8 = b'Y';
+pub const OPEN_USER_ORDER_NO: u8 = b'N';
 pub const OBSERVED_USER_ORDER_ACCOUNT_LEN: usize = 344;
 pub const FILL_USER_ORDER_DATA_LEN: usize = 32;
 pub const REDEEM_MARKET_OUTCOME_DATA_LEN: usize = 8;
@@ -338,6 +341,7 @@ mod tests {
     fn decodes_confirmed_open_order_fixture() {
         let decoded = decode_observed_open_order(&OPEN_FIXTURE).unwrap();
         assert_eq!(decoded.side, OutcomeSide::Yes);
+        assert_eq!(decoded.side, OutcomeSide::Yes);
         assert_eq!(decoded.input_amount, 948_096);
         assert_eq!(decoded.quoted_output_amount, 11_000_000);
     }
@@ -383,6 +387,19 @@ mod tests {
     fn rejects_unknown_action() {
         let mut fixture = OPEN_FIXTURE;
         fixture[0] = 0x42;
+        assert!(decode_observed_open_order(&fixture).is_err());
+    }
+
+    #[test]
+    fn decodes_no_side_and_rejects_unknown_side() {
+        let mut fixture = OPEN_FIXTURE;
+        fixture[OPEN_USER_ORDER_SIDE_OFFSET] = OPEN_USER_ORDER_NO;
+        assert_eq!(
+            decode_observed_open_order(&fixture).unwrap().side,
+            OutcomeSide::No
+        );
+
+        fixture[OPEN_USER_ORDER_SIDE_OFFSET] = b'X';
         assert!(decode_observed_open_order(&fixture).is_err());
     }
 
