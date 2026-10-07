@@ -819,6 +819,10 @@ async function main() {
   const directOpenIx = new TransactionInstruction({
     programId: DFLOW_PM,
     keys: [
+      // Successful mainnet 0x40 transactions pass the DFlow program itself as
+      // account meta 0. The evidence collector's normalized DFlow view strips
+      // this self-program meta, so replay the raw top-level account shape here.
+      { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
       { pubkey: OBSERVED_OPEN_MARKET_LEDGER, isSigner: false, isWritable: false },
       { pubkey: OBSERVED_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
