@@ -593,6 +593,7 @@ async function discoverOrdersFromChain(connection) {
   let openEventCount = 0;
   let usdcInputOpenEventCount = 0;
   const openEventExamples = [];
+  const usdcInputOpenEventExamples = [];
   let action64InstructionCount = 0;
   const action64InstructionShapes = {};
   const action64InstructionExamples = [];
@@ -650,6 +651,7 @@ async function discoverOrdersFromChain(connection) {
           openEventCount,
           usdcInputOpenEventCount,
           openEventExamples,
+          usdcInputOpenEventExamples,
           action64InstructionCount,
           action64InstructionShapes,
           action64InstructionExamples,
@@ -669,37 +671,64 @@ async function discoverOrdersFromChain(connection) {
       const dflowIxs = dflowInstructions(tx, keys);
       const deltas = tokenBalanceDeltas(tx, keys);
 
-      for (const eventIx of dflowIxs.filter((candidate) => candidate.event?.typeName === "open")) {
+      for (const eventIx of dflowIxs.filter(
+        (candidate) => candidate.event?.typeName === "open",
+      )) {
         openEventCount += 1;
-        if (eventIx.event.inputMint === USDC_MINT) {
+        const isUsdcInput = eventIx.event.inputMint === USDC_MINT;
+        if (isUsdcInput) {
           usdcInputOpenEventCount += 1;
         }
+
+        const eventEvidence = {
+          signature: item.signature,
+          slot: tx.slot,
+          blockTime: tx.blockTime,
+          event: eventIx.event,
+          signers: signerKeys(tx),
+          siblingDflowInstructions: dflowIxs
+            .filter((candidate) => candidate !== eventIx)
+            .map((candidate) => {
+              const candidateData = candidate.dataHex
+                ? Buffer.from(candidate.dataHex, "hex")
+                : null;
+              const locateAccount = (pubkey) =>
+                candidate.accounts
+                  .map((account, index) => (account === pubkey ? index : -1))
+                  .filter((index) => index >= 0);
+              return {
+                dataLength: candidateData?.length ?? null,
+                actionU64:
+                  candidateData && candidateData.length >= 8
+                    ? readU64LE(candidateData, 0)?.toString()
+                    : null,
+                dataHex: candidate.dataHex,
+                accounts: candidate.accounts,
+                accountMetas: candidate.accountMetas,
+                inputMintAccountIndexes: locateAccount(eventIx.event.inputMint),
+                outputMintAccountIndexes: locateAccount(eventIx.event.outputMint),
+                userOrderAccountIndexes: locateAccount(eventIx.event.userOrder),
+                inputMintDataOffsets: candidateData
+                  ? findOffsets(candidateData, eventIx.event.inputMint)
+                  : [],
+                outputMintDataOffsets: candidateData
+                  ? findOffsets(candidateData, eventIx.event.outputMint)
+                  : [],
+                userOrderDataOffsets: candidateData
+                  ? findOffsets(candidateData, eventIx.event.userOrder)
+                  : [],
+              };
+            }),
+          tokenBalanceSnapshots: tokenBalanceSnapshots(tx, keys),
+          tokenBalanceDeltas: deltas,
+          instructionTrace: orderedInstructionTrace(tx, keys),
+        };
+
         if (openEventExamples.length < 100) {
-          openEventExamples.push({
-            signature: item.signature,
-            slot: tx.slot,
-            blockTime: tx.blockTime,
-            event: eventIx.event,
-            signers: signerKeys(tx),
-            siblingDflowInstructions: dflowIxs
-              .filter((candidate) => candidate !== eventIx)
-              .map((candidate) => {
-                const candidateData = candidate.dataHex
-                  ? Buffer.from(candidate.dataHex, "hex")
-                  : null;
-                return {
-                  dataLength: candidateData?.length ?? null,
-                  actionU64:
-                    candidateData && candidateData.length >= 8
-                      ? readU64LE(candidateData, 0)?.toString()
-                      : null,
-                  dataHex: candidate.dataHex,
-                  accounts: candidate.accounts,
-                  accountMetas: candidate.accountMetas,
-                };
-              }),
-            tokenBalanceDeltas: deltas,
-          });
+          openEventExamples.push(eventEvidence);
+        }
+        if (isUsdcInput && usdcInputOpenEventExamples.length < 100) {
+          usdcInputOpenEventExamples.push(eventEvidence);
         }
       }
 
@@ -846,6 +875,7 @@ async function discoverOrdersFromChain(connection) {
     openEventCount,
     usdcInputOpenEventCount,
     openEventExamples,
+    usdcInputOpenEventExamples,
     action64InstructionCount,
     action64InstructionShapes,
     action64InstructionExamples,
@@ -1240,6 +1270,7 @@ async function main() {
       openEventCount: discovery.openEventCount,
       usdcInputOpenEventCount: discovery.usdcInputOpenEventCount,
       openEventExamples: discovery.openEventExamples,
+      usdcInputOpenEventExamples: discovery.usdcInputOpenEventExamples,
       action64InstructionCount: discovery.action64InstructionCount,
       action64InstructionShapes: discovery.action64InstructionShapes,
       action64InstructionExamples: discovery.action64InstructionExamples,
