@@ -471,13 +471,14 @@ pub mod pactum_vault {
             ctx.accounts.approved_market.enabled,
             PactumError::MarketDisabled
         );
-        let _side = dflow::prediction_v1::OutcomeSide::from_mint(
+        let side = dflow::prediction_v1::OutcomeSide::from_mint(
             &ctx.accounts.approved_market,
             ctx.accounts.outcome_mint.key(),
         )?;
 
         let decoded = dflow::prediction_v1::validate_open_order_data(
             &order_data,
+            side,
             input_amount,
             quoted_outcome_atoms,
             slippage_bps,
