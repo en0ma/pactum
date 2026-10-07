@@ -7,6 +7,8 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
@@ -38,6 +40,12 @@ const OBSERVED_OPEN_MARKET_USDC = new PublicKey(
 const OBSERVED_OPEN_INPUT_AMOUNT = 11_528_148;
 const OBSERVED_OPEN_ORDER_ACCOUNT = new PublicKey(
   "BWH9XeXk1akXZnAFjbwEhiP11bHhY4e5DSTfnyx5F872",
+);
+const OBSERVED_OPEN_SOURCE_USDC = new PublicKey(
+  "CRCDmaarraYcqmpQw5JrrvtSRSegB25ccf3quripJrf2",
+);
+const OBSERVED_OPEN_USER = new PublicKey(
+  "EsVkndo2uxdiijaquSvdW7BAmcUJwTGfR6Upvq5wTV2q",
 );
 const OPEN_PROBE_YES_MINT = new PublicKey(
   "CA7FMbzNTfeR7jkLzF113bBJupKwq98cixaQtc3b3frb",
@@ -803,7 +811,105 @@ async function main() {
     ),
   ]);
 
-  const directOpenSourceUsdc = associatedTokenAddress(payer.publicKey, USDC_MINT);
+  // First replay the exact successful on-chain DFlow instruction tuple.
+  // Simulation keeps the historical wallet's signer privilege in the message
+  // while disabling only cryptographic signature verification. This isolates
+  // DFlow's account/PDA validation from our later generated-wallet experiment.
+  const observedCanonicalSource = associatedTokenAddress(
+    OBSERVED_OPEN_USER,
+    USDC_MINT,
+  );
+  if (!observedCanonicalSource.equals(OBSERVED_OPEN_SOURCE_USDC)) {
+    throw new Error("observed DFlow source is not the historical user's canonical USDC ATA");
+  }
+  await surfpoolRpc("surfnet_setAccount", [
+    OBSERVED_OPEN_USER.toBase58(),
+    {
+      lamports: 2_000_000_000,
+      owner: SystemProgram.programId.toBase58(),
+      executable: false,
+      data: "",
+    },
+  ]);
+  await surfpoolRpc("surfnet_setTokenAccount", [
+    OBSERVED_OPEN_USER.toBase58(),
+    USDC_MINT.toBase58(),
+    { amount: OBSERVED_OPEN_INPUT_AMOUNT, state: "initialized" },
+  ]);
+  await surfpoolRpc("surfnet_setAccount", [
+    OBSERVED_OPEN_ORDER_ACCOUNT.toBase58(),
+    {
+      lamports: 0,
+      owner: SystemProgram.programId.toBase58(),
+      executable: false,
+      data: "",
+    },
+  ]);
+
+  const exactObservedOpenIx = new TransactionInstruction({
+    programId: DFLOW_PM,
+    keys: [
+      { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
+      { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+      { pubkey: OBSERVED_OPEN_MARKET_LEDGER, isSigner: false, isWritable: false },
+      { pubkey: OBSERVED_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
+      { pubkey: OBSERVED_OPEN_ORDER_ACCOUNT, isSigner: false, isWritable: true },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: OBSERVED_OPEN_SOURCE_USDC, isSigner: false, isWritable: true },
+      { pubkey: OBSERVED_OPEN_USER, isSigner: true, isWritable: true },
+      { pubkey: OBSERVED_OPEN_USER, isSigner: true, isWritable: true },
+      { pubkey: OBSERVED_OPEN_USER, isSigner: true, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: OBSERVED_OPEN_ORDER_FIXTURE,
+  });
+  const exactObservedMessage = new TransactionMessage({
+    payerKey: OBSERVED_OPEN_USER,
+    recentBlockhash: (await connection.getLatestBlockhash()).blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 30_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 25_173 }),
+      exactObservedOpenIx,
+    ],
+  }).compileToV0Message();
+  const exactObservedTx = new VersionedTransaction(exactObservedMessage);
+  const exactObservedSim = await connection.simulateTransaction(exactObservedTx, {
+    sigVerify: false,
+  });
+  const exactObservedLogs = exactObservedSim.value.logs ?? [];
+  const exactObservedResult = {
+    err: exactObservedSim.value.err,
+    reachedDflow: exactObservedLogs.some((line) =>
+      line.includes(`Program ${DFLOW_PM.toBase58()} invoke [1]`),
+    ),
+    createdOrder: exactObservedLogs.some((line) =>
+      line.includes(`Program ${SystemProgram.programId.toBase58()} invoke [2]`),
+    ),
+    transferredUsdc: exactObservedLogs.some((line) =>
+      line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} invoke [2]`),
+    ),
+  };
+  console.log(
+    `DFlow exact historical Open replay (${OBSERVED_OPEN_SIGNATURE}): ${JSON.stringify(
+      exactObservedResult,
+    )}`,
+  );
+  if (
+    exactObservedResult.err ||
+    !exactObservedResult.reachedDflow ||
+    !exactObservedResult.createdOrder ||
+    !exactObservedResult.transferredUsdc
+  ) {
+    console.error(exactObservedLogs.join("\n"));
+    throw new Error(
+      `exact historical DFlow Open did not reproduce on the fork: ${JSON.stringify(
+        exactObservedResult,
+      )}`,
+    );
+  }
+
+    const directOpenSourceUsdc = associatedTokenAddress(payer.publicKey, USDC_MINT);
   await surfpoolRpc("surfnet_setTokenAccount", [
     payer.publicKey.toBase58(),
     USDC_MINT.toBase58(),
