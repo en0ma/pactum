@@ -65,6 +65,9 @@ const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(
 const TOKEN_2022_PROGRAM = new PublicKey(
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
 );
+const CLOCK_SYSVAR = new PublicKey(
+  "SysvarC1ock11111111111111111111111111111111",
+);
 const FILL_RECONCILE_OUTCOME_MINT = OPEN_PROBE_YES_MINT;
 const OBSERVED_OPEN_ORDER_FIXTURE = Buffer.from(
   "40000000000000001a87472a47fa0089590068000000a701d4e7af0000000000" +
@@ -810,6 +813,53 @@ async function main() {
       observedMarketUsdcAccount,
     ),
   ]);
+
+  // Rewind Surfpool's local Clock sysvar to the actual successful
+  // transaction time. DFlow's market-open check is clock-dependent, while
+  // Surfpool otherwise starts from the current mainnet clock.
+  const observedTx = await jsonRpc(MAINNET_RPC_URL, "getTransaction", [
+    OBSERVED_OPEN_SIGNATURE,
+    {
+      encoding: "json",
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    },
+  ]);
+  if (!observedTx?.blockTime) {
+    throw new Error(
+      `missing blockTime for observed DFlow Open ${OBSERVED_OPEN_SIGNATURE}`,
+    );
+  }
+  const clockInfo = await connection.getAccountInfo(CLOCK_SYSVAR, "confirmed");
+  if (!clockInfo || clockInfo.data.length < 40) {
+    throw new Error("Surfpool Clock sysvar is unavailable or malformed");
+  }
+  const historicalClockData = Buffer.from(clockInfo.data);
+  historicalClockData.writeBigInt64LE(BigInt(observedTx.blockTime), 32);
+  await surfpoolRpc("surfnet_setAccount", [
+    CLOCK_SYSVAR.toBase58(),
+    {
+      lamports: clockInfo.lamports,
+      owner: clockInfo.owner.toBase58(),
+      executable: clockInfo.executable,
+      data: historicalClockData.toString("hex"),
+    },
+  ]);
+  const rewoundClockInfo = await connection.getAccountInfo(
+    CLOCK_SYSVAR,
+    "confirmed",
+  );
+  const rewoundUnixTimestamp = rewoundClockInfo?.data.readBigInt64LE(32);
+  if (rewoundUnixTimestamp !== BigInt(observedTx.blockTime)) {
+    throw new Error(
+      `failed to set Surfpool Clock unix_timestamp: ${rewoundUnixTimestamp} != ${observedTx.blockTime}`,
+    );
+  }
+  console.log(
+    `DFlow historical replay clock: ${new Date(
+      observedTx.blockTime * 1000,
+    ).toISOString()}`,
+  );
 
   // First replay the exact successful on-chain DFlow instruction tuple.
   // Simulation keeps the historical wallet's signer privilege in the message
