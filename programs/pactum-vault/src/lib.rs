@@ -558,9 +558,9 @@ pub mod pactum_vault {
                 AccountMeta::new(ctx.accounts.order_account.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
                 AccountMeta::new(ctx.accounts.vault_usdc.key(), false),
-                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
-                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
-                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
+                AccountMeta::new(ctx.accounts.keeper.key(), true),
+                AccountMeta::new(ctx.accounts.keeper.key(), true),
+                AccountMeta::new(ctx.accounts.keeper.key(), true),
                 AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
             ],
@@ -1192,7 +1192,7 @@ pub mod pactum_vault {
                 AccountMeta::new(ctx.accounts.order_account.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
                 AccountMeta::new(ctx.accounts.keeper_usdc.key(), false),
-                AccountMeta::new_readonly(ctx.accounts.keeper.key(), true),
+                AccountMeta::new(ctx.accounts.keeper.key(), true),
                 AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
                 AccountMeta::new_readonly(ctx.accounts.probe_authority.key(), true),
                 AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
@@ -2247,6 +2247,7 @@ pub struct ProbeDflowOpenOrderPda<'info> {
 #[cfg(feature = "test-hooks")]
 #[derive(Accounts)]
 pub struct ProbeDflowOpenOrderKeeperFunded<'info> {
+    #[account(mut)]
     pub keeper: Signer<'info>,
 
     /// CHECK: deterministic CI-only PDA that owns the funding USDC account.
