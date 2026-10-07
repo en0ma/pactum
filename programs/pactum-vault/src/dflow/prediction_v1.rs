@@ -445,19 +445,20 @@ mod tests {
 
     #[test]
     fn open_order_data_enforces_amount_quote_and_slippage() {
-        let decoded = validate_open_order_data(
-            &OPEN_FIXTURE,
-            OutcomeSide::Yes,
-            948_096,
-            11_000_000,
-            50,
-        )
-        .unwrap();
+        let decoded =
+            validate_open_order_data(&OPEN_FIXTURE, OutcomeSide::Yes, 948_096, 11_000_000, 50)
+                .unwrap();
         assert_eq!(decoded.input_amount, 948_096);
         assert_eq!(decoded.quoted_output_amount, 11_000_000);
 
-        assert!(validate_open_order_data(&OPEN_FIXTURE, OutcomeSide::Yes, 948_095, 11_000_000, 50).is_err());
-        assert!(validate_open_order_data(&OPEN_FIXTURE, OutcomeSide::Yes, 948_096, 12_000_000, 50).is_err());
+        assert!(
+            validate_open_order_data(&OPEN_FIXTURE, OutcomeSide::Yes, 948_095, 11_000_000, 50)
+                .is_err()
+        );
+        assert!(
+            validate_open_order_data(&OPEN_FIXTURE, OutcomeSide::Yes, 948_096, 12_000_000, 50)
+                .is_err()
+        );
         assert!(validate_open_order_data(
             &OPEN_FIXTURE,
             OutcomeSide::Yes,
@@ -470,14 +471,10 @@ mod tests {
 
     #[test]
     fn open_order_data_rejects_side_mismatch() {
-        assert!(validate_open_order_data(
-            &OPEN_FIXTURE,
-            OutcomeSide::No,
-            948_096,
-            11_000_000,
-            50,
-        )
-        .is_err());
+        assert!(
+            validate_open_order_data(&OPEN_FIXTURE, OutcomeSide::No, 948_096, 11_000_000, 50,)
+                .is_err()
+        );
 
         let mut invalid = OPEN_FIXTURE;
         invalid[16] = b'X';
