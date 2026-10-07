@@ -822,9 +822,10 @@ async function main() {
   const directOpenIx = new TransactionInstruction({
     programId: DFLOW_PM,
     keys: [
-      // Exact 11 account metas captured from the successful top-level 0x40
-      // instruction. The trace renderer prints the invoked program separately;
-      // the DFlow program id is not an instruction account meta.
+      // Exact raw account metas captured from the successful top-level 0x40
+      // instruction. DFlow deliberately includes its own program id as meta 0;
+      // it is also used by the inner event-emission CPI.
+      { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
       { pubkey: OBSERVED_OPEN_MARKET_LEDGER, isSigner: false, isWritable: false },
       { pubkey: OBSERVED_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
