@@ -50,6 +50,7 @@ impl OutcomeSide {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObservedOpenOrder {
+    pub side: OutcomeSide,
     pub input_amount: u64,
     pub quoted_output_amount: u64,
 }
@@ -97,7 +98,14 @@ pub fn decode_observed_open_order(data: &[u8]) -> Result<ObservedOpenOrder> {
         PactumError::InvalidDflowFixture
     );
 
+    let side = match data[16] {
+        b'Y' => OutcomeSide::Yes,
+        b'N' => OutcomeSide::No,
+        _ => return err!(PactumError::InvalidDflowFixture),
+    };
+
     Ok(ObservedOpenOrder {
+        side,
         input_amount: read_u64(data, 24)?,
         quoted_output_amount: read_u64(data, 32)?,
     })
@@ -194,11 +202,16 @@ pub fn minimum_outcome_for_consumed_input(
 
 pub fn validate_open_order_data(
     data: &[u8],
+    expected_side: OutcomeSide,
     expected_input_amount: u64,
     quoted_outcome_atoms: u64,
     slippage_bps: u16,
 ) -> Result<ObservedOpenOrder> {
     let decoded = decode_observed_open_order(data)?;
+    require!(
+        decoded.side == expected_side,
+        PactumError::InvalidDflowFixture
+    );
     require!(
         decoded.input_amount == expected_input_amount,
         PactumError::InvalidDflowFixture
@@ -324,6 +337,7 @@ mod tests {
     #[test]
     fn decodes_confirmed_open_order_fixture() {
         let decoded = decode_observed_open_order(&OPEN_FIXTURE).unwrap();
+        assert_eq!(decoded.side, OutcomeSide::Yes);
         assert_eq!(decoded.input_amount, 948_096);
         assert_eq!(decoded.quoted_output_amount, 11_000_000);
     }
@@ -414,19 +428,43 @@ mod tests {
 
     #[test]
     fn open_order_data_enforces_amount_quote_and_slippage() {
-        let decoded = validate_open_order_data(&OPEN_FIXTURE, 948_096, 11_000_000, 50).unwrap();
+        let decoded = validate_open_order_data(
+            &OPEN_FIXTURE,
+            OutcomeSide::Yes,
+            948_096,
+            11_000_000,
+            50,
+        )
+        .unwrap();
         assert_eq!(decoded.input_amount, 948_096);
         assert_eq!(decoded.quoted_output_amount, 11_000_000);
 
-        assert!(validate_open_order_data(&OPEN_FIXTURE, 948_095, 11_000_000, 50).is_err());
-        assert!(validate_open_order_data(&OPEN_FIXTURE, 948_096, 12_000_000, 50).is_err());
+        assert!(validate_open_order_data(&OPEN_FIXTURE, OutcomeSide::Yes, 948_095, 11_000_000, 50).is_err());
+        assert!(validate_open_order_data(&OPEN_FIXTURE, OutcomeSide::Yes, 948_096, 12_000_000, 50).is_err());
         assert!(validate_open_order_data(
             &OPEN_FIXTURE,
+            OutcomeSide::Yes,
             948_096,
             11_000_000,
             MAX_TRADE_SLIPPAGE_BPS + 1,
         )
         .is_err());
+    }
+
+    #[test]
+    fn open_order_data_rejects_side_mismatch() {
+        assert!(validate_open_order_data(
+            &OPEN_FIXTURE,
+            OutcomeSide::No,
+            948_096,
+            11_000_000,
+            50,
+        )
+        .is_err());
+
+        let mut invalid = OPEN_FIXTURE;
+        invalid[16] = b'X';
+        assert!(decode_observed_open_order(&invalid).is_err());
     }
 
     #[test]
