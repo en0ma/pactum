@@ -946,31 +946,64 @@ async function main() {
     )}`,
   );
   if (exactObservedLogs.some((line) => line.includes("market is not open"))) {
-    const ledgerInfo = await connection.getAccountInfo(
-      OBSERVED_OPEN_MARKET_LEDGER,
-      "confirmed",
+    const closedLedgerData = Buffer.from(observedLedgerAccount.data[0], "base64");
+    const referenceLedgerData = Buffer.from(
+      dflowRegistry.marketLedgerAccount.data[0],
+      "base64",
     );
-    const nowUnix = Math.floor(Date.now() / 1000);
-    const plausibleTimestamps = [];
-    if (ledgerInfo) {
-      for (let offset = 0; offset + 8 <= ledgerInfo.data.length; offset += 1) {
-        const value = Number(ledgerInfo.data.readBigInt64LE(offset));
-        if (
-          Number.isSafeInteger(value) &&
-          value >= 1_700_000_000 &&
-          value <= nowUnix + 365 * 24 * 60 * 60
-        ) {
-          plausibleTimestamps.push({
-            offset,
-            value,
-            iso: new Date(value * 1000).toISOString(),
-          });
-        }
+    const lowEntropyDiffs = [];
+    const sharedLength = Math.min(
+      closedLedgerData.length,
+      referenceLedgerData.length,
+    );
+    for (let offset = 0; offset < sharedLength; offset += 1) {
+      const closed = closedLedgerData[offset];
+      const reference = referenceLedgerData[offset];
+      if (closed !== reference && closed <= 16 && reference <= 16) {
+        lowEntropyDiffs.push({ offset, closed, reference });
       }
     }
     console.log(
-      `DFlow closed-market ledger timestamp candidates: ${JSON.stringify(
-        plausibleTimestamps,
+      `DFlow closed/open ledger low-entropy diffs: ${JSON.stringify({
+        closedLength: closedLedgerData.length,
+        referenceLength: referenceLedgerData.length,
+        candidates: lowEntropyDiffs,
+      })}`,
+    );
+
+    const statusProbeResults = [];
+    for (const candidate of lowEntropyDiffs.slice(0, 96)) {
+      const patched = Buffer.from(closedLedgerData);
+      patched[candidate.offset] = candidate.reference;
+      await surfpoolRpc("surfnet_setAccount", [
+        OBSERVED_OPEN_MARKET_LEDGER.toBase58(),
+        {
+          lamports: observedLedgerAccount.lamports,
+          owner: observedLedgerAccount.owner,
+          executable: observedLedgerAccount.executable,
+          data: patched.toString("hex"),
+        },
+      ]);
+      const probe = await connection.simulateTransaction(exactObservedTx, {
+        sigVerify: false,
+      });
+      const probeLogs = probe.value.logs ?? [];
+      if (!probeLogs.some((line) => line.includes("market is not open"))) {
+        statusProbeResults.push({
+          ...candidate,
+          err: probe.value.err,
+          logs: probeLogs.slice(-8),
+        });
+      }
+    }
+
+    await cloneAccountValueToSurfpool(
+      OBSERVED_OPEN_MARKET_LEDGER,
+      observedLedgerAccount,
+    );
+    console.log(
+      `DFlow market-open single-byte probe results: ${JSON.stringify(
+        statusProbeResults,
       )}`,
     );
   }
