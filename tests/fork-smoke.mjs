@@ -27,13 +27,15 @@ const DFLOW_EVENT_AUTHORITY = new PublicKey(
 const OPEN_PROBE_MARKET_LEDGER = new PublicKey(
   "5UHoukpeVPQbmSUaAPWnkXEKZMrjSmwTqqaD8eXmvKNn",
 );
+const OBSERVED_OPEN_SIGNATURE =
+  "3dwLaco7wkLwmasim8eTP7S4coRZdrMR8qnnXCkk7PusNRZ5NF2TyANrA75z9Gykp1pgRj8DTk6r2NnWF6m2HRwN";
 const OBSERVED_OPEN_MARKET_LEDGER = new PublicKey(
-  "8Y81MaKfCyzcHfJSTnKK84K6Bn42JmDtKLv55pECuYVu",
+  "4UqMKGLyWb17RfwjBwJEtgyTN4DeQjLm4u6F3mDCRNCE",
 );
 const OBSERVED_OPEN_MARKET_USDC = new PublicKey(
-  "CpYEPerKv9VedvHaPQyRxBxt1sJgZpg7dARYyHPSArEA",
+  "5uZWUEr4p38NKN6mwJm3ryGqzQJas87XNoNoWfRNswQb",
 );
-const OBSERVED_OPEN_INPUT_AMOUNT = 19_713_776;
+const OBSERVED_OPEN_INPUT_AMOUNT = 11_528_148;
 const OPEN_PROBE_YES_MINT = new PublicKey(
   "CA7FMbzNTfeR7jkLzF113bBJupKwq98cixaQtc3b3frb",
 );
@@ -54,9 +56,9 @@ const TOKEN_2022_PROGRAM = new PublicKey(
 );
 const FILL_RECONCILE_OUTCOME_MINT = OPEN_PROBE_YES_MINT;
 const OBSERVED_OPEN_ORDER_FIXTURE = Buffer.from(
-  "4000000000000000c7b79ecb883326fe590044000000eb01f0ce2c0100000000" +
-    "80cc060200000000000000000000000000000000000000000000000000000000" +
-    "00000000000000000000000000000000",
+  "40000000000000001a87472a47fa0089590068000000a701d4e7af0000000000" +
+    "4066030100000000a9a95c68d67bd50e27ee6ed0e3a13d00d38b7ce6294ff443" +
+    "e1e6d9dd309aebd70000000000000000",
   "hex",
 );
 
@@ -768,6 +770,102 @@ async function main() {
     ),
   ]);
   const openProbeMarketUsdc = dflowRegistry.marketUsdc;
+
+  // Reproduce a known successful mainnet OpenUserOrder as a top-level DFlow
+  // instruction before testing the same ABI through Pactum CPI. The historical
+  // transaction was ComputeBudget -> ComputeBudget -> DFlow 0x40, and DFlow
+  // itself performed CreateAccount + TransferChecked + event emission.
+  const observedAccounts = await jsonRpc(MAINNET_RPC_URL, "getMultipleAccounts", [
+    [
+      OBSERVED_OPEN_MARKET_LEDGER.toBase58(),
+      OBSERVED_OPEN_MARKET_USDC.toBase58(),
+    ],
+    { encoding: "base64", commitment: "confirmed" },
+  ]);
+  const [observedLedgerAccount, observedMarketUsdcAccount] =
+    observedAccounts?.value ?? [];
+  if (!observedLedgerAccount || !observedMarketUsdcAccount) {
+    throw new Error(
+      `missing accounts for observed DFlow Open fixture ${OBSERVED_OPEN_SIGNATURE}`,
+    );
+  }
+  await Promise.all([
+    cloneAccountValueToSurfpool(
+      OBSERVED_OPEN_MARKET_LEDGER,
+      observedLedgerAccount,
+    ),
+    cloneAccountValueToSurfpool(
+      OBSERVED_OPEN_MARKET_USDC,
+      observedMarketUsdcAccount,
+    ),
+  ]);
+
+  const directOpenSourceUsdc = associatedTokenAddress(payer.publicKey, USDC_MINT);
+  await surfpoolRpc("surfnet_setTokenAccount", [
+    payer.publicKey.toBase58(),
+    USDC_MINT.toBase58(),
+    { amount: OBSERVED_OPEN_INPUT_AMOUNT, state: "initialized" },
+  ]);
+  const directOpenOrder = Keypair.generate().publicKey;
+  await surfpoolRpc("surfnet_setAccount", [
+    directOpenOrder.toBase58(),
+    {
+      lamports: 0,
+      owner: SystemProgram.programId.toBase58(),
+      executable: false,
+      data: "",
+    },
+  ]);
+  const directOpenIx = new TransactionInstruction({
+    programId: DFLOW_PM,
+    keys: [
+      { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+      { pubkey: OBSERVED_OPEN_MARKET_LEDGER, isSigner: false, isWritable: false },
+      { pubkey: OBSERVED_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
+      { pubkey: directOpenOrder, isSigner: false, isWritable: true },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: directOpenSourceUsdc, isSigner: false, isWritable: true },
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: OBSERVED_OPEN_ORDER_FIXTURE,
+  });
+  const directOpenTx = new Transaction().add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 30_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 25_173 }),
+    directOpenIx,
+  );
+  directOpenTx.feePayer = payer.publicKey;
+  directOpenTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+  directOpenTx.sign(payer);
+  const directOpenSim = await connection.simulateTransaction(directOpenTx);
+  const directOpenLogs = directOpenSim.value.logs ?? [];
+  const directOpenInsufficientKeys = directOpenLogs.some((line) =>
+    line.includes("insufficient account keys for instruction"),
+  );
+  if (directOpenInsufficientKeys) {
+    console.error(directOpenLogs.join("\n"));
+    throw new Error(
+      "known top-level DFlow 0x40 Open shape unexpectedly failed account-key validation",
+    );
+  }
+  console.log(
+    `DFlow top-level Open replay (${OBSERVED_OPEN_SIGNATURE}): ${JSON.stringify({
+      err: directOpenSim.value.err,
+      reachedDflow: directOpenLogs.some((line) =>
+        line.includes(`Program ${DFLOW_PM.toBase58()} invoke [1]`),
+      ),
+      createdOrder: directOpenLogs.some((line) =>
+        line.includes(`Program ${SystemProgram.programId.toBase58()} invoke [2]`),
+      ),
+      transferredUsdc: directOpenLogs.some((line) =>
+        line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} invoke [2]`),
+      ),
+    })}`,
+  );
 
   const [openProbeAuthority] = PublicKey.findProgramAddressSync(
     [Buffer.from("dflow_open_order_probe")],
