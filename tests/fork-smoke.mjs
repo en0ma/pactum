@@ -819,10 +819,9 @@ async function main() {
   const directOpenIx = new TransactionInstruction({
     programId: DFLOW_PM,
     keys: [
-      // Successful mainnet 0x40 transactions pass the DFlow program itself as
-      // account meta 0. The evidence collector's normalized DFlow view strips
-      // this self-program meta, so replay the raw top-level account shape here.
-      { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
+      // Exact 11 account metas captured from the successful top-level 0x40
+      // instruction. The trace renderer prints the invoked program separately;
+      // the DFlow program id is not an instruction account meta.
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
       { pubkey: OBSERVED_OPEN_MARKET_LEDGER, isSigner: false, isWritable: false },
       { pubkey: OBSERVED_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
@@ -850,26 +849,33 @@ async function main() {
   const directOpenInsufficientKeys = directOpenLogs.some((line) =>
     line.includes("insufficient account keys for instruction"),
   );
-  if (directOpenInsufficientKeys) {
+  const directOpenEvidence = {
+    err: directOpenSim.value.err,
+    reachedDflow: directOpenLogs.some((line) =>
+      line.includes(`Program ${DFLOW_PM.toBase58()} invoke [1]`),
+    ),
+    createdOrder: directOpenLogs.some((line) =>
+      line.includes(`Program ${SystemProgram.programId.toBase58()} invoke [2]`),
+    ),
+    transferredUsdc: directOpenLogs.some((line) =>
+      line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} invoke [2]`),
+    ),
+  };
+  console.log(
+    `DFlow top-level Open replay (${OBSERVED_OPEN_SIGNATURE}): ${JSON.stringify(directOpenEvidence)}`,
+  );
+  if (
+    directOpenInsufficientKeys ||
+    directOpenEvidence.err ||
+    !directOpenEvidence.reachedDflow ||
+    !directOpenEvidence.createdOrder ||
+    !directOpenEvidence.transferredUsdc
+  ) {
     console.error(directOpenLogs.join("\n"));
     throw new Error(
-      "known top-level DFlow 0x40 Open shape unexpectedly failed account-key validation",
+      `known top-level DFlow 0x40 Open did not reproduce the successful on-chain flow: ${JSON.stringify(directOpenEvidence)}`,
     );
   }
-  console.log(
-    `DFlow top-level Open replay (${OBSERVED_OPEN_SIGNATURE}): ${JSON.stringify({
-      err: directOpenSim.value.err,
-      reachedDflow: directOpenLogs.some((line) =>
-        line.includes(`Program ${DFLOW_PM.toBase58()} invoke [1]`),
-      ),
-      createdOrder: directOpenLogs.some((line) =>
-        line.includes(`Program ${SystemProgram.programId.toBase58()} invoke [2]`),
-      ),
-      transferredUsdc: directOpenLogs.some((line) =>
-        line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} invoke [2]`),
-      ),
-    })}`,
-  );
 
   const [openProbeAuthority] = PublicKey.findProgramAddressSync(
     [Buffer.from("dflow_open_order_probe")],
