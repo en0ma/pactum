@@ -121,11 +121,33 @@ function registryMarketBytes({
   ]);
 }
 
+function isSurfpoolRemoteFetchError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Failed to fetch accounts from remote");
+}
+
 async function sendInstructions(connection, payer, ...instructions) {
-  const tx = new Transaction().add(...instructions);
-  return sendAndConfirmTransaction(connection, tx, [payer], {
-    commitment: "confirmed",
-  });
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const tx = new Transaction().add(...instructions);
+      return await sendAndConfirmTransaction(connection, tx, [payer], {
+        commitment: "confirmed",
+      });
+    } catch (error) {
+      if (!isSurfpoolRemoteFetchError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+
+      const delayMs = 500 * 2 ** (attempt - 1);
+      console.warn(
+        `Surfpool remote account fetch failed; retry ${attempt}/${maxAttempts} after ${delayMs}ms`,
+      );
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error("sendInstructions exhausted retries");
 }
 
 async function surfpoolRpc(method, params) {
