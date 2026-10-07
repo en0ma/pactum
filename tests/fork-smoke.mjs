@@ -36,6 +36,9 @@ const OBSERVED_OPEN_MARKET_USDC = new PublicKey(
   "5uZWUEr4p38NKN6mwJm3ryGqzQJas87XNoNoWfRNswQb",
 );
 const OBSERVED_OPEN_INPUT_AMOUNT = 11_528_148;
+const OBSERVED_OPEN_ORDER_ACCOUNT = new PublicKey(
+  "BWH9XeXk1akXZnAFjbwEhiP11bHhY4e5DSTfnyx5F872",
+);
 const OPEN_PROBE_YES_MINT = new PublicKey(
   "CA7FMbzNTfeR7jkLzF113bBJupKwq98cixaQtc3b3frb",
 );
@@ -806,7 +809,7 @@ async function main() {
     USDC_MINT.toBase58(),
     { amount: OBSERVED_OPEN_INPUT_AMOUNT, state: "initialized" },
   ]);
-  const directOpenOrder = Keypair.generate().publicKey;
+  const directOpenOrder = OBSERVED_OPEN_ORDER_ACCOUNT;
   await surfpoolRpc("surfnet_setAccount", [
     directOpenOrder.toBase58(),
     {
