@@ -1075,6 +1075,91 @@ function stableNumberOffset(samples, getter) {
   return common.length === 1 ? common[0] : null;
 }
 
+function summarizeOpenSideEvidence(samples) {
+  const marketSideMints = new Map();
+  let validatedOrders = 0;
+  let yesOrders = 0;
+  let noOrders = 0;
+  let invalidSideByteOrders = 0;
+  let ambiguousTerminalMintOrders = 0;
+
+  for (const sample of samples) {
+    const dataHex = sample.seed?.dataHex;
+    if (!dataHex || dataHex.length < 34) continue;
+
+    const sideByte = Number.parseInt(dataHex.slice(32, 34), 16);
+    const side =
+      sideByte === 0x59 ? "Y" : sideByte === 0x4e ? "N" : null;
+    if (!side) {
+      invalidSideByteOrders += 1;
+      continue;
+    }
+
+    const terminalMints = new Set(
+      (sample.lifecycleEvents ?? [])
+        .filter((item) => ["fill", "revert"].includes(item.event?.typeName))
+        .map((item) => item.event?.outputMint)
+        .filter((mint) => mint && mint !== USDC_MINT),
+    );
+    if (terminalMints.size !== 1) {
+      if (terminalMints.size > 1) ambiguousTerminalMintOrders += 1;
+      continue;
+    }
+
+    validatedOrders += 1;
+    if (side === "Y") yesOrders += 1;
+    else noOrders += 1;
+
+    const key = `${sample.seed.marketLedger}:${side}`;
+    const mint = [...terminalMints][0];
+    const mints = marketSideMints.get(key) ?? new Set();
+    mints.add(mint);
+    marketSideMints.set(key, mints);
+  }
+
+  const contradictoryMappings = [...marketSideMints.entries()]
+    .filter(([, mints]) => mints.size > 1)
+    .map(([marketSide, mints]) => ({
+      marketSide,
+      outcomeMints: [...mints],
+    }));
+
+  const perMarket = new Map();
+  for (const [marketSide, mints] of marketSideMints.entries()) {
+    const separator = marketSide.lastIndexOf(":");
+    const marketLedger = marketSide.slice(0, separator);
+    const side = marketSide.slice(separator + 1);
+    const row = perMarket.get(marketLedger) ?? {};
+    row[side] = [...mints][0] ?? null;
+    perMarket.set(marketLedger, row);
+  }
+
+  const bothSideMappings = [...perMarket.entries()]
+    .filter(([, row]) => row.Y && row.N)
+    .map(([marketLedger, row]) => ({
+      marketLedger,
+      yesMint: row.Y,
+      noMint: row.N,
+      distinct: row.Y !== row.N,
+    }));
+
+  return {
+    sideByteOffset: 16,
+    yesByte: "0x59",
+    noByte: "0x4e",
+    validatedOrders,
+    yesOrders,
+    noOrders,
+    invalidSideByteOrders,
+    ambiguousTerminalMintOrders,
+    contradictoryMappings,
+    marketsWithBothSides: bothSideMappings.length,
+    sameMintForBothSides: bothSideMappings.filter((item) => !item.distinct)
+      .length,
+    bothSideMappings: bothSideMappings.slice(0, 25),
+  };
+}
+
 function summarize(samples, scannedSignatures) {
   const actionCounts = {};
   let live344 = 0;
@@ -1243,6 +1328,17 @@ async function main() {
   }
 
   const completeSamples = samples.filter((sample) => !sample.collectionError);
+  const openSideEvidence = summarizeOpenSideEvidence(completeSamples);
+  if (
+    openSideEvidence.invalidSideByteOrders > 0 ||
+    openSideEvidence.contradictoryMappings.length > 0 ||
+    openSideEvidence.sameMintForBothSides > 0
+  ) {
+    throw new Error(
+      `DFlow OpenUserOrder side-byte evidence contradicted: ${JSON.stringify(openSideEvidence)}`,
+    );
+  }
+
   const dataset = {
     schemaVersion: 2,
     collectedAt: new Date().toISOString(),
@@ -1263,6 +1359,7 @@ async function main() {
     },
     summary: {
       ...summarize(completeSamples, discovery.scannedSignatures),
+      openSideEvidence,
       discoveredOpenCandidates: discovery.candidates.length,
       totalOpenInstructions: discovery.totalOpenInstructions,
       divergentOpenInstructions: discovery.divergentOpenInstructions,
