@@ -27,13 +27,13 @@ const DFLOW_EVENT_AUTHORITY = new PublicKey(
 const OPEN_PROBE_MARKET_LEDGER = new PublicKey(
   "5UHoukpeVPQbmSUaAPWnkXEKZMrjSmwTqqaD8eXmvKNn",
 );
-const HISTORICAL_OPEN_MARKET_LEDGER = new PublicKey(
-  "8fXmQHzSTa3DnFLfVHkcTWkgTPEnZ1b1xBeNu2beDKBc",
+const OBSERVED_OPEN_MARKET_LEDGER = new PublicKey(
+  "8Y81MaKfCyzcHfJSTnKK84K6Bn42JmDtKLv55pECuYVu",
 );
-const HISTORICAL_OPEN_MARKET_USDC = new PublicKey(
-  "H29a68pevDogHmFRvdDxzGYeA93NuS6v3MQGxo1bFUhi",
+const OBSERVED_OPEN_MARKET_USDC = new PublicKey(
+  "CpYEPerKv9VedvHaPQyRxBxt1sJgZpg7dARYyHPSArEA",
 );
-const HISTORICAL_OPEN_INPUT_AMOUNT = 4_994_326;
+const OBSERVED_OPEN_INPUT_AMOUNT = 19_713_776;
 const OPEN_PROBE_YES_MINT = new PublicKey(
   "CA7FMbzNTfeR7jkLzF113bBJupKwq98cixaQtc3b3frb",
 );
@@ -53,10 +53,10 @@ const TOKEN_2022_PROGRAM = new PublicKey(
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
 );
 const FILL_RECONCILE_OUTCOME_MINT = OPEN_PROBE_YES_MINT;
-const OPEN_ORDER_FIXTURE = Buffer.from(
-  "4000000000000000dd3a1169ea2257b05900e1010000730516354c0000000000" +
-    "c0fc9b0100000000075998a1357cecfae339ae49f4859416a85e725889b46d0d" +
-    "4df42bd08cd6644e1800000000000000",
+const OBSERVED_OPEN_ORDER_FIXTURE = Buffer.from(
+  "4000000000000000c7b79ecb883326fe590044000000eb01f0ce2c0100000000" +
+    "80cc060200000000000000000000000000000000000000000000000000000000" +
+    "00000000000000000000000000000000",
   "hex",
 );
 
@@ -694,31 +694,31 @@ async function main() {
   }
 
 
-  const historicalOpenAccounts = await jsonRpc(
+  const observedOpenAccounts = await jsonRpc(
     MAINNET_RPC_URL,
     "getMultipleAccounts",
     [
       [
-        HISTORICAL_OPEN_MARKET_LEDGER.toBase58(),
-        HISTORICAL_OPEN_MARKET_USDC.toBase58(),
+        OBSERVED_OPEN_MARKET_LEDGER.toBase58(),
+        OBSERVED_OPEN_MARKET_USDC.toBase58(),
       ],
       { encoding: "base64", commitment: "confirmed" },
     ],
   );
   if (
-    !historicalOpenAccounts?.value?.[0] ||
-    !historicalOpenAccounts?.value?.[1]
+    !observedOpenAccounts?.value?.[0] ||
+    !observedOpenAccounts?.value?.[1]
   ) {
-    throw new Error("historical DFlow Open fixture accounts are unavailable on mainnet");
+    throw new Error("observed DFlow Open fixture accounts are unavailable on mainnet");
   }
   await Promise.all([
     cloneAccountValueToSurfpool(
-      HISTORICAL_OPEN_MARKET_LEDGER,
-      historicalOpenAccounts.value[0],
+      OBSERVED_OPEN_MARKET_LEDGER,
+      observedOpenAccounts.value[0],
     ),
     cloneAccountValueToSurfpool(
-      HISTORICAL_OPEN_MARKET_USDC,
-      historicalOpenAccounts.value[1],
+      OBSERVED_OPEN_MARKET_USDC,
+      observedOpenAccounts.value[1],
     ),
   ]);
 
@@ -762,7 +762,7 @@ async function main() {
   await surfpoolRpc("surfnet_setTokenAccount", [
     openProbeAuthority.toBase58(),
     USDC_MINT.toBase58(),
-    { amount: HISTORICAL_OPEN_INPUT_AMOUNT, state: "initialized" },
+    { amount: OBSERVED_OPEN_INPUT_AMOUNT, state: "initialized" },
   ]);
   await surfpoolRpc("surfnet_setTokenAccount", [
     payer.publicKey.toBase58(),
@@ -773,15 +773,15 @@ async function main() {
   const openProbeOrderAccount = Keypair.generate().publicKey;
   const openProbeData = Buffer.concat([
     anchorDiscriminator("probe_dflow_open_order_pda"),
-    OPEN_ORDER_FIXTURE,
+    OBSERVED_OPEN_ORDER_FIXTURE,
   ]);
   const openProbeIx = new TransactionInstruction({
     programId: PROGRAM_ID,
     keys: [
       { pubkey: openProbeAuthority, isSigner: false, isWritable: false },
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
-      { pubkey: HISTORICAL_OPEN_MARKET_LEDGER, isSigner: false, isWritable: true },
-      { pubkey: HISTORICAL_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
+      { pubkey: OBSERVED_OPEN_MARKET_LEDGER, isSigner: false, isWritable: true },
+      { pubkey: OBSERVED_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
       { pubkey: openProbeOrderAccount, isSigner: false, isWritable: true },
       { pubkey: USDC_MINT, isSigner: false, isWritable: false },
       { pubkey: openProbeSourceUsdc, isSigner: false, isWritable: true },
@@ -840,8 +840,8 @@ async function main() {
       { pubkey: payer.publicKey, isSigner: true, isWritable: false },
       { pubkey: openProbeAuthority, isSigner: false, isWritable: false },
       { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
-      { pubkey: HISTORICAL_OPEN_MARKET_LEDGER, isSigner: false, isWritable: true },
-      { pubkey: HISTORICAL_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
+      { pubkey: OBSERVED_OPEN_MARKET_LEDGER, isSigner: false, isWritable: true },
+      { pubkey: OBSERVED_OPEN_MARKET_USDC, isSigner: false, isWritable: true },
       { pubkey: fundedOrderAccount, isSigner: false, isWritable: true },
       { pubkey: USDC_MINT, isSigner: false, isWritable: false },
       { pubkey: openProbeSourceUsdc, isSigner: false, isWritable: true },
@@ -852,8 +852,8 @@ async function main() {
     ],
     data: Buffer.concat([
       anchorDiscriminator("probe_dflow_open_order_keeper_funded"),
-      OPEN_ORDER_FIXTURE,
-      u64Le(HISTORICAL_OPEN_INPUT_AMOUNT),
+      OBSERVED_OPEN_ORDER_FIXTURE,
+      u64Le(OBSERVED_OPEN_INPUT_AMOUNT),
     ]),
   });
 
@@ -901,7 +901,7 @@ async function main() {
     line.includes(`Program ${SPL_TOKEN_PROGRAM.toBase58()} success`),
   );
 
-  const historicalOpenAbiRejected = fundedProbeLogs.some((line) =>
+  const observedOpenAbiRejected = fundedProbeLogs.some((line) =>
     line.includes("insufficient account keys for instruction"),
   );
 
@@ -910,20 +910,20 @@ async function main() {
     !fundedTransferInvoked ||
     !fundedTransferSucceeded ||
     fundedProbeSignerEscalation ||
-    (!historicalOpenAbiRejected &&
+    (!observedOpenAbiRejected &&
       (fundedProbeSim.value.err ||
         !fundedSourceTransferInvoked ||
         !fundedSourceTransferSucceeded))
   ) {
     console.error(fundedProbeLogs.join("\n"));
     throw new Error(
-      "Keeper-funded OpenUserOrder evidence probe did not match either a successful current ABI or the known historical-ABI rejection",
+      "Keeper-funded OpenUserOrder evidence probe did not match either a successful current ABI or the observed summer replay rejection",
     );
   }
 
-  if (historicalOpenAbiRejected) {
+  if (observedOpenAbiRejected) {
     console.log(
-      "DFlow evidence: current program rejected the historical 11-account 0x40 OpenUserOrder ABI with insufficient account keys",
+      "DFlow evidence: current program rejected the observed summer 11-account 0x40 OpenUserOrder replay with insufficient account keys",
     );
   }
 
