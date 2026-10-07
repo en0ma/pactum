@@ -895,6 +895,36 @@ async function main() {
       exactObservedResult,
     )}`,
   );
+  if (exactObservedLogs.some((line) => line.includes("market is not open"))) {
+    const ledgerInfo = await connection.getAccountInfo(
+      OBSERVED_OPEN_MARKET_LEDGER,
+      "confirmed",
+    );
+    const nowUnix = Math.floor(Date.now() / 1000);
+    const plausibleTimestamps = [];
+    if (ledgerInfo) {
+      for (let offset = 0; offset + 8 <= ledgerInfo.data.length; offset += 1) {
+        const value = Number(ledgerInfo.data.readBigInt64LE(offset));
+        if (
+          Number.isSafeInteger(value) &&
+          value >= 1_700_000_000 &&
+          value <= nowUnix + 365 * 24 * 60 * 60
+        ) {
+          plausibleTimestamps.push({
+            offset,
+            value,
+            iso: new Date(value * 1000).toISOString(),
+          });
+        }
+      }
+    }
+    console.log(
+      `DFlow closed-market ledger timestamp candidates: ${JSON.stringify(
+        plausibleTimestamps,
+      )}`,
+    );
+  }
+
   if (
     exactObservedResult.err ||
     !exactObservedResult.reachedDflow ||
