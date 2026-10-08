@@ -60,6 +60,7 @@ pub struct ObservedOpenOrder {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenOrderKeys {
+    pub dflow_program: Pubkey,
     pub event_authority: Pubkey,
     pub market_ledger: Pubkey,
     pub market_usdc_account: Pubkey,
@@ -67,6 +68,8 @@ pub struct OpenOrderKeys {
     pub usdc_mint: Pubkey,
     pub source_usdc: Pubkey,
     pub token_authority: Pubkey,
+    pub fill_recipient: Pubkey,
+    pub refund_recipient: Pubkey,
     pub token_program: Pubkey,
     pub system_program: Pubkey,
 }
@@ -117,10 +120,16 @@ pub fn decode_observed_open_order(data: &[u8]) -> Result<ObservedOpenOrder> {
 pub fn validate_open_order_keys(
     keys: &OpenOrderKeys,
     market: &ApprovedMarket,
-    vault_usdc: Pubkey,
+    expected_source_usdc: Pubkey,
     expected_token_authority: Pubkey,
+    expected_recipient: Pubkey,
 ) -> Result<()> {
     require!(market.enabled, PactumError::MarketDisabled);
+    require_keys_eq!(
+        keys.dflow_program,
+        super::DFLOW_PREDICTION_MARKETS,
+        PactumError::InvalidDflowAccounts
+    );
     require_keys_eq!(
         keys.event_authority,
         EVENT_AUTHORITY,
@@ -143,12 +152,22 @@ pub fn validate_open_order_keys(
     );
     require_keys_eq!(
         keys.source_usdc,
-        vault_usdc,
+        expected_source_usdc,
         PactumError::InvalidDflowAccounts
     );
     require_keys_eq!(
         keys.token_authority,
         expected_token_authority,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.fill_recipient,
+        expected_recipient,
+        PactumError::InvalidDflowAccounts
+    );
+    require_keys_eq!(
+        keys.refund_recipient,
+        expected_recipient,
         PactumError::InvalidDflowAccounts
     );
     require_keys_eq!(
@@ -410,6 +429,7 @@ mod tests {
         let vault_authority = Pubkey::new_unique();
 
         let keys = OpenOrderKeys {
+            dflow_program: super::DFLOW_PREDICTION_MARKETS,
             event_authority: EVENT_AUTHORITY,
             market_ledger: market.market_ledger,
             market_usdc_account: Pubkey::new_unique(),
@@ -417,11 +437,20 @@ mod tests {
             usdc_mint: crate::dflow::USDC_MINT,
             source_usdc: vault_usdc,
             token_authority: vault_authority,
+            fill_recipient: vault_authority,
+            refund_recipient: vault_authority,
             token_program: SPL_TOKEN_PROGRAM,
             system_program: SYSTEM_PROGRAM,
         };
 
-        assert!(validate_open_order_keys(&keys, &market, vault_usdc, vault_authority,).is_err());
+        assert!(validate_open_order_keys(
+            &keys,
+            &market,
+            vault_usdc,
+            vault_authority,
+            vault_authority,
+        )
+        .is_err());
     }
 
     #[test]
