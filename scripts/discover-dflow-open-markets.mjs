@@ -50,6 +50,23 @@ const ledgers = [...new Set(
   [...confirmedOpens, ...otherObserved].map((ix) => ix.accounts[1]).filter(Boolean),
 )].slice(0, 100);
 
+// Previously observed DFlow-owned 568-byte ledgers from focused CI #207/#210.
+// Revalidate these on every run; historical screening is not tradability proof.
+const HISTORICAL_LEDGER_FALLBACK = [
+  "CPy9eaGECdD7W8ZhWdaJ3vhfp2711QLtStRKYGnPAjrx",
+  "6xdVnEEjUh4fTAN1hGtsDbcim8CdvwCWvw3xGmNZrPF5",
+  "CT91GupQzfM35qyVdb5Rk4NG4AYNoS43ET9cqzdJbtaU",
+  "hQ5abQ1karPbvbPhKLEp3U3Jf1jdNTtp7QEdVvtML5u",
+  "EdWBKGV8hKcpyR4Nu1bx3nkG4ScepKa8UWz1HS4bNxhx",
+  "EocEe9dzW8hSjvcTA9NbQyfamTAQPL7eWeTUBECkm7P3",
+  "6pQTyrpa1i3EaBq1p2LPJr6q6QjqugX7DxqWkzWyVnK5",
+  "D6ugpVCWWU78VdRoa6MXkuPEB24b7ceW3sgMCrfTrHYX",
+];
+const recentlyObservedLedgers = new Set(ledgers);
+for (const ledger of HISTORICAL_LEDGER_FALLBACK) {
+  if (!recentlyObservedLedgers.has(ledger)) ledgers.push(ledger);
+}
+
 const candidates = [];
 let accountsChecked = 0;
 const openActionExamples = (evidence.summary?.action64InstructionExamples ?? [])
@@ -90,6 +107,7 @@ for (let start = 0; start < ledgers.length; start += 20) {
     ) continue;
     candidates.push({
       marketLedger: batch[i],
+      evidenceSource: recentlyObservedLedgers.has(batch[i]) ? "current-window" : "historical-ledger-refresh",
       marketUsdc,
       yesMint,
       noMint,
@@ -118,7 +136,9 @@ const report = {
   observedDflowCallRoutes: evidence.summary?.transactionRoutes ?? {},
   observedDflowActions: evidence.summary?.dflowActionCounts ?? {},
   successfulWindowTransactions: evidence.summary?.successfulWindowTransactions ?? null,
-  observedLedgers: ledgers.length,
+  observedLedgers: recentlyObservedLedgers.size,
+  historicalLedgerFallbackCount: HISTORICAL_LEDGER_FALLBACK.length,
+  ledgersRefreshed: ledgers.length,
   validLedgerAccountsChecked: accountsChecked,
   candidateUsdcInputOpenExamples: candidates.reduce(
     (sum, candidate) => sum + candidate.matchingUsdcInputOpenExamples, 0
