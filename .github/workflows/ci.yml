@@ -139,6 +139,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  dflow-connectivity:
+    if: ${{ github.event_name == 'pull_request' }}
+    name: DFlow public API connectivity (read-only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check DFlow DNS, HTTP, and runner country
+        run: node scripts/probe-dflow-connectivity.mjs
+      - name: Upload DFlow connectivity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dflow-connectivity
+          path: artifacts/dflow-network-connectivity.json
+          if-no-files-found: warn
+          retention-days: 7
+
   dflow-evidence:
     if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.scope == 'evidence' || inputs.scope == 'full')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     name: DFlow evidence (${{ matrix.window }})
