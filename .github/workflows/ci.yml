@@ -188,13 +188,15 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Collect recent on-chain instruction samples
+      - name: Set current UTC observation window
+        run: |
+          echo "DFLOW_DATASET_SCAN_AFTER=$(date -u +%Y-%m-%dT00:00:00Z)" >> "$GITHUB_ENV"
+          echo "DFLOW_DATASET_SCAN_BEFORE=$(date -u -d 'tomorrow' +%Y-%m-%dT00:00:00Z)" >> "$GITHUB_ENV"
+      - name: Collect today's confirmed DFlow instructions
         env:
           DFLOW_DATASET_SAMPLE_LIMIT: "10"
           DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE: "500"
-          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "4000"
-          DFLOW_DATASET_SCAN_AFTER: "2026-09-01T00:00:00Z"
-          DFLOW_DATASET_SCAN_BEFORE: "2026-10-08T00:00:00Z"
+          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "6000"
           DFLOW_DATASET_TX_LIMIT_PER_ORDER: "4"
           DFLOW_DATASET_MAX_RUNTIME_MS: "150000"
           DFLOW_DATASET_INSTRUCTION_EXAMPLE_LIMIT: "1000"
