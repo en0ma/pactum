@@ -45,7 +45,7 @@ for (const [role, id] of programs) {
     }
     for (const signature of samples) {
       try {
-        const tx = await withRetry(() => conn.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: "confirmed" }));
+        const tx = await withRetry(() => conn.getParsedTransaction(signature, { maxSupportedTransactionVersion: 1, commitment: "confirmed" }));
         if (!tx) { row.sampleFetchFailures++; continue; }
         const outer = tx.transaction.message.instructions;
         for (const ix of outer) {
