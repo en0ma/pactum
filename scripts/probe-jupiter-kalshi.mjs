@@ -117,9 +117,25 @@ if (!apiKey) {
       markets: marketRecords.slice(0, 50),
     };
   }
+  report.cryptoMarketDiagnostics = {};
+  for (const [provider, value] of Object.entries(report.cryptoProviderComparison)) {
+    const markets = value.markets ?? [];
+    const btc = markets.filter(m => /BTC|BITCOIN/i.test(
+      [m.eventId, m.eventTitle, m.marketId, m.marketTitle].join(" ")
+    ));
+    const open = btc.filter(m => /^(open|active|trading)$/i.test(String(m.status ?? "")));
+    report.cryptoMarketDiagnostics[provider] = {
+      inspectedMarketRecords: markets.length,
+      btcMarketsInSample: btc.length,
+      openBtcMarketsInSample: open.length,
+      btcExamples: btc.slice(0, 8),
+      titleExamples: markets.slice(0, 5),
+      truncated: value.marketCount > markets.length,
+    };
+  }
   const status = await request("/trading-status");
   report.tradingStatusRequest = { ok: status.ok, httpStatus: status.httpStatus ?? null, error: status.error ?? null, tradingActive: status.ok ? status.payload.trading_active ?? status.payload.data?.trading_active ?? null : null };
 }
 fs.mkdirSync("artifacts", { recursive: true });
 fs.writeFileSync(OUTPUT, JSON.stringify(report, null, 2) + "\n");
-console.log(JSON.stringify({ credentialAvailable: report.credentialAvailable, eventsRequest: report.eventsRequest, eventsReturned: report.eventsReturned ?? null, kalshiMarkets: report.markets.length, btc15mMatches: report.btc15m?.length ?? 0, btc15mOpenCandidates: report.btc15mOpenCandidates?.length ?? 0, pages: report.pages?.length ?? 0, scanComplete: report.scanComplete ?? false, cryptoProviderComparison: Object.fromEntries(Object.entries(report.cryptoProviderComparison ?? {}).map(([k,v]) => [k,{ok:v.ok,eventCount:v.eventCount,marketCount:v.marketCount,error:v.error}])), tradingStatusRequest: report.tradingStatusRequest, output: OUTPUT }));
+console.log(JSON.stringify({ credentialAvailable: report.credentialAvailable, eventsRequest: report.eventsRequest, eventsReturned: report.eventsReturned ?? null, kalshiMarkets: report.markets.length, btc15mMatches: report.btc15m?.length ?? 0, btc15mOpenCandidates: report.btc15mOpenCandidates?.length ?? 0, pages: report.pages?.length ?? 0, scanComplete: report.scanComplete ?? false, cryptoProviderComparison: Object.fromEntries(Object.entries(report.cryptoProviderComparison ?? {}).map(([k,v]) => [k,{ok:v.ok,eventCount:v.eventCount,marketCount:v.marketCount,error:v.error}])), cryptoMarketDiagnostics: Object.fromEntries(Object.entries(report.cryptoMarketDiagnostics ?? {}).map(([k,v])=>[k,{btcMarketsInSample:v.btcMarketsInSample,openBtcMarketsInSample:v.openBtcMarketsInSample,btcExamples:v.btcExamples.slice(0,3)}])), tradingStatusRequest: report.tradingStatusRequest, output: OUTPUT }));
