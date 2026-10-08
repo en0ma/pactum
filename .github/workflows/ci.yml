@@ -111,7 +111,7 @@ jobs:
           fi
 
   jupiter-kalshi-discovery:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.scope == 'jupiter' }}
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'jupiter') }}
     name: Jupiter Kalshi API discovery (read-only)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -199,7 +199,7 @@ jobs:
 
 
   dflow-market-discovery:
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.scope == 'discovery' || inputs.scope == 'full')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.scope == 'discovery' || inputs.scope == 'full')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     name: DFlow active-market discovery
     runs-on: ubuntu-24.04
     timeout-minutes: 12
