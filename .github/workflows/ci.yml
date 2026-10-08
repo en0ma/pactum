@@ -202,6 +202,8 @@ jobs:
         run: node scripts/collect-dflow-mainnet.mjs
       - name: Check active-market candidates
         run: node scripts/discover-dflow-open-markets.mjs
+      - name: Check USDC-input open readiness
+        run: node scripts/preflight-dflow-open.mjs
       - name: Upload discovery evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -209,6 +211,7 @@ jobs:
           name: dflow-open-market-candidates
           path: |
             artifacts/dflow-open-market-candidates.json
+            artifacts/dflow-open-preflight.json
             artifacts/dflow-mainnet-recent.json
           if-no-files-found: warn
           retention-days: 14
