@@ -1307,26 +1307,30 @@ async function main() {
   const observedOpenAbiRejected = fundedProbeLogs.some((line) =>
     line.includes("insufficient account keys for instruction"),
   );
+  const fundedProbeMarketClosed = fundedProbeLogs.some((line) =>
+    line.includes("market is not open"),
+  );
 
   if (
     !fundedProbeReachedDflow ||
     !fundedTransferInvoked ||
     !fundedTransferSucceeded ||
     fundedProbeSignerEscalation ||
-    (!observedOpenAbiRejected &&
+    observedOpenAbiRejected ||
+    (!fundedProbeMarketClosed &&
       (fundedProbeSim.value.err ||
         !fundedSourceTransferInvoked ||
         !fundedSourceTransferSucceeded))
   ) {
     console.error(fundedProbeLogs.join("\n"));
     throw new Error(
-      "Keeper-funded OpenUserOrder evidence probe did not match either a successful current ABI or the observed summer replay rejection",
+      "Keeper-funded OpenUserOrder evidence probe did not reach DFlow with the observed account shape and accepted PDA recipient signature",
     );
   }
 
-  if (observedOpenAbiRejected) {
+  if (fundedProbeMarketClosed) {
     console.log(
-      "DFlow evidence: current program rejected the observed summer 11-account 0x40 OpenUserOrder replay with insufficient account keys",
+      "DFlow keeper-funded replay reached the deployed program with the full observed account shape and PDA recipient signer before the historical market-closed boundary.",
     );
   }
 
