@@ -11,11 +11,12 @@ const PROGRAM = "pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const OUTPUT = process.env.DFLOW_OPEN_CANDIDATES_OUTPUT ?? "artifacts/dflow-open-market-candidates.json";
+const EVIDENCE = process.env.DFLOW_RECENT_EVIDENCE_FILE ?? "artifacts/dflow-mainnet-recent.json";
 const MAX_CANDIDATES = Math.min(25, Math.max(1, Number(process.env.DFLOW_MAX_OPEN_CANDIDATES ?? 12)));
 let rpcId = 0;
 
 async function rpc(method, params) {
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 6; attempt++) {
     const response = await fetch(RPC_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -23,8 +24,8 @@ async function rpc(method, params) {
     });
     const body = await response.json();
     if (!response.ok || body.error) {
-      if ((response.status === 429 || body.error?.code === 429) && attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      if ((response.status === 429 || body.error?.code === 429) && attempt < 5) {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
         continue;
       }
       throw new Error(`${method}: ${JSON.stringify(body.error ?? response.status)}`);
@@ -38,53 +39,65 @@ function pubkeyAt(data, offset) {
 }
 
 const now = Math.floor(Date.now() / 1000);
-const accounts = await rpc("getProgramAccounts", [
-  PROGRAM,
-  {
-    commitment: "confirmed",
-    encoding: "base64",
-    filters: [
-      { dataSize: 568 },
-      { memcmp: { offset: 564, bytes: "1" } },
-    ],
-    withContext: false,
-  },
-]);
+const evidence = JSON.parse(fs.readFileSync(EVIDENCE, "utf8"));
+const ledgers = [...new Set(
+  (evidence.instructionExamples ?? [])
+    .filter((ix) => (ix.actionU64 === "72" || ix.actionU64 === "64") &&
+      ix.dataLength === 80 && Array.isArray(ix.accounts) && ix.accounts.length >= 11)
+    .map((ix) => ix.accounts[1])
+    .filter(Boolean),
+)].slice(0, 100);
 
 const candidates = [];
-for (const entry of accounts.slice(0, 1000)) {
-  const data = Buffer.from(entry.account.data[0], "base64");
-  if (data.length !== 568 || data[564] !== 0 || entry.account.owner !== PROGRAM) continue;
-  const marketUsdc = pubkeyAt(data, 272);
-  const yesMint = pubkeyAt(data, 377);
-  const noMint = pubkeyAt(data, 449);
-  const [rail] = await rpc("getMultipleAccounts", [
-    [marketUsdc],
+let accountsChecked = 0;
+for (let start = 0; start < ledgers.length; start += 20) {
+  const batch = ledgers.slice(start, start + 20);
+  const response = await rpc("getMultipleAccounts", [
+    batch,
     { commitment: "confirmed", encoding: "base64" },
-  ]).then((r) => r.value);
-  if (!rail || rail.owner !== TOKEN_PROGRAM) continue;
-  const railData = Buffer.from(rail.data[0], "base64");
-  if (
-    railData.length < 64 ||
-    pubkeyAt(railData, 0) !== USDC ||
-    pubkeyAt(railData, 32) !== entry.pubkey
-  ) continue;
-  candidates.push({
-    marketLedger: entry.pubkey,
-    marketUsdc,
-    yesMint,
-    noMint,
-    statusByte564: data[564],
-    relationshipVerified: true,
-    executableOpenVerified: false,
-  });
+  ]);
+  const matching = response.value ?? [];
+  for (let i = 0; i < batch.length; i++) {
+    const account = matching[i];
+    if (!account || account.owner !== PROGRAM) continue;
+    const data = Buffer.from(account.data[0], "base64");
+    if (data.length !== 568) continue;
+    accountsChecked++;
+    if (data[564] !== 0) continue;
+    const marketUsdc = pubkeyAt(data, 272);
+    const yesMint = pubkeyAt(data, 377);
+    const noMint = pubkeyAt(data, 449);
+    const [rail] = (await rpc("getMultipleAccounts", [
+      [marketUsdc],
+      { commitment: "confirmed", encoding: "base64" },
+    ])).value ?? [];
+    if (!rail || rail.owner !== TOKEN_PROGRAM) continue;
+    const railData = Buffer.from(rail.data[0], "base64");
+    if (
+      railData.length < 64 ||
+      pubkeyAt(railData, 0) !== USDC ||
+      pubkeyAt(railData, 32) !== batch[i]
+    ) continue;
+    candidates.push({
+      marketLedger: batch[i],
+      marketUsdc,
+      yesMint,
+      noMint,
+      statusByte564: data[564],
+      relationshipVerified: true,
+      executableOpenVerified: false,
+    });
+    if (candidates.length >= MAX_CANDIDATES) break;
+  }
   if (candidates.length >= MAX_CANDIDATES) break;
 }
 
 const report = {
   source: "solana-mainnet-rpc-only",
   observedAtUnix: now,
-  scannedStatusZeroLedgers: accounts.length,
+  sourceEvidence: EVIDENCE,
+  observedLedgers: ledgers.length,
+  validLedgerAccountsChecked: accountsChecked,
   candidates,
   warning: "Zero status byte and verified USDC rail are only screening signals. A successful DFlow OpenUserOrder on an actually active market is still required.",
 };
