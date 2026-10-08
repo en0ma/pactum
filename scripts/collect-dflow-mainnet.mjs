@@ -586,6 +586,9 @@ async function discoverOrdersFromChain(connection) {
   let oldestSignature = before ?? null;
   let oldestBlockTime = null;
   let windowSignatures = 0;
+  let newestInWindowBlockTime = null;
+  let oldestInWindowBlockTime = null;
+  let reachedOlderBoundary = false;
   let dflowInstructionCount = 0;
   let totalOpenInstructions = 0;
   let divergentOpenInstructions = 0;
@@ -638,10 +641,14 @@ async function discoverOrdersFromChain(connection) {
         continue;
       }
       if (item.blockTime < SCAN_AFTER_UNIX) {
+        reachedOlderBoundary = true;
         return {
           candidates: [...orders.values()],
           scannedSignatures,
           windowSignatures,
+          newestInWindowBlockTime,
+          oldestInWindowBlockTime,
+          reachedOlderBoundary,
           dflowInstructionCount,
           instructionShapes,
           instructionExamples,
@@ -663,6 +670,8 @@ async function discoverOrdersFromChain(connection) {
 
       reachedWindow = true;
       windowSignatures += 1;
+      newestInWindowBlockTime = Math.max(newestInWindowBlockTime ?? 0, item.blockTime);
+      oldestInWindowBlockTime = Math.min(oldestInWindowBlockTime ?? item.blockTime, item.blockTime);
       if (item.err) continue;
 
       const tx = await getTransactionWithRetry(connection, item.signature);
@@ -866,6 +875,9 @@ async function discoverOrdersFromChain(connection) {
     candidates: [...orders.values()],
     scannedSignatures,
     windowSignatures,
+    newestInWindowBlockTime,
+    oldestInWindowBlockTime,
+    reachedOlderBoundary,
     dflowInstructionCount,
     instructionShapes,
     instructionExamples,
@@ -1385,10 +1397,14 @@ async function main() {
         ).length,
       dflowInstructionCount: discovery.dflowInstructionCount,
       windowSignatures: discovery.windowSignatures,
+      scannedProgramId: DFLOW_PM.toBase58(),
+      scanCoverageComplete: discovery.reachedOlderBoundary,
+      newestInWindowBlockTimeIso: discovery.newestInWindowBlockTime ? new Date(discovery.newestInWindowBlockTime * 1000).toISOString() : null,
+      oldestInWindowBlockTimeIso: discovery.oldestInWindowBlockTime ? new Date(discovery.oldestInWindowBlockTime * 1000).toISOString() : null,
       reachedHistoricalWindow: discovery.reachedWindow,
-      oldestSignature: discovery.oldestSignature,
-      oldestBlockTime: discovery.oldestBlockTime,
-      oldestBlockTimeIso: discovery.oldestBlockTime
+      oldestPaginationSignature: discovery.oldestSignature,
+      oldestPaginationBlockTime: discovery.oldestBlockTime,
+      oldestPaginationBlockTimeIso: discovery.oldestBlockTime
         ? new Date(discovery.oldestBlockTime * 1000).toISOString()
         : null,
       instructionShapes: discovery.instructionShapes,
