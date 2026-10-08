@@ -601,6 +601,9 @@ async function discoverOrdersFromChain(connection) {
   const action64InstructionShapes = {};
   const action64InstructionExamples = [];
   let reachedWindow = false;
+  const transactionRoutes = {};
+  const dflowActionCounts = {};
+  let successfulWindowTransactions = 0;
 
   while (
     scannedSignatures < PROGRAM_SCAN_LIMIT &&
@@ -649,6 +652,9 @@ async function discoverOrdersFromChain(connection) {
           newestInWindowBlockTime,
           oldestInWindowBlockTime,
           reachedOlderBoundary,
+          transactionRoutes,
+          dflowActionCounts,
+          successfulWindowTransactions,
           dflowInstructionCount,
           instructionShapes,
           instructionExamples,
@@ -678,6 +684,19 @@ async function discoverOrdersFromChain(connection) {
       if (!tx) continue;
       const keys = resolvedKeys(tx);
       const dflowIxs = dflowInstructions(tx, keys);
+      successfulWindowTransactions += 1;
+      const routeTrace = orderedInstructionTrace(tx, keys);
+      for (const step of routeTrace.filter((step) => step.programId === DFLOW_PM.toBase58())) {
+        const parent = routeTrace.find((entry) =>
+          entry.outerIndex === step.outerIndex && entry.innerIndex === null
+        )?.programId ?? "unknown";
+        const route = step.innerIndex === null ? "top-level" : "inner";
+        const key = `${route} via ${parent}`;
+        transactionRoutes[key] = (transactionRoutes[key] ?? 0) + 1;
+        const data = step.dataHex ? Buffer.from(step.dataHex, "hex") : null;
+        const action = data?.length >= 8 ? data.readBigUInt64LE(0).toString() : "unknown";
+        dflowActionCounts[action] = (dflowActionCounts[action] ?? 0) + 1;
+      }
       const deltas = tokenBalanceDeltas(tx, keys);
 
       for (const eventIx of dflowIxs.filter(
@@ -878,6 +897,9 @@ async function discoverOrdersFromChain(connection) {
     newestInWindowBlockTime,
     oldestInWindowBlockTime,
     reachedOlderBoundary,
+    transactionRoutes,
+    dflowActionCounts,
+    successfulWindowTransactions,
     dflowInstructionCount,
     instructionShapes,
     instructionExamples,
@@ -1399,6 +1421,9 @@ async function main() {
       windowSignatures: discovery.windowSignatures,
       scannedProgramId: DFLOW_PM.toBase58(),
       scanCoverageComplete: discovery.reachedOlderBoundary,
+      successfulWindowTransactions: discovery.successfulWindowTransactions,
+      transactionRoutes: discovery.transactionRoutes,
+      dflowActionCounts: discovery.dflowActionCounts,
       newestInWindowBlockTimeIso: discovery.newestInWindowBlockTime ? new Date(discovery.newestInWindowBlockTime * 1000).toISOString() : null,
       oldestInWindowBlockTimeIso: discovery.oldestInWindowBlockTime ? new Date(discovery.oldestInWindowBlockTime * 1000).toISOString() : null,
       reachedHistoricalWindow: discovery.reachedWindow,
