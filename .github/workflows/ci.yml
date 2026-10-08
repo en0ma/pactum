@@ -5,6 +5,17 @@ on:
     branches: ["main"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "Run only the checks needed for the current task"
+        required: true
+        type: choice
+        default: discovery
+        options:
+          - discovery
+          - architecture
+          - evidence
+          - full
 
 permissions:
   contents: read
@@ -99,6 +110,7 @@ jobs:
           fi
 
   dflow-evidence:
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.scope == 'evidence' || inputs.scope == 'full')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     name: DFlow evidence (${{ matrix.window }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -152,20 +164,6 @@ jobs:
           DFLOW_DATASET_OUTPUT: artifacts/dflow-mainnet-${{ matrix.window }}.json
         run: node scripts/collect-dflow-mainnet.mjs
 
-      - name: Discover active-market candidates from on-chain state
-        if: matrix.window == 'recent'
-        continue-on-error: true
-        run: node scripts/discover-dflow-open-markets.mjs
-
-      - name: Upload active-market candidate report
-        if: always() && matrix.window == 'recent'
-        uses: actions/upload-artifact@v4
-        with:
-          name: dflow-open-market-candidates
-          path: artifacts/dflow-open-market-candidates.json
-          if-no-files-found: warn
-          retention-days: 14
-
       - name: Upload DFlow mainnet evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -176,7 +174,47 @@ jobs:
           retention-days: 14
 
 
+  dflow-market-discovery:
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.scope == 'discovery' || inputs.scope == 'full')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    name: DFlow active-market discovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Collect recent on-chain instruction samples
+        env:
+          DFLOW_DATASET_SAMPLE_LIMIT: "10"
+          DFLOW_DATASET_PROGRAM_SIGNATURE_PAGE: "500"
+          DFLOW_DATASET_PROGRAM_SCAN_LIMIT: "4000"
+          DFLOW_DATASET_SCAN_AFTER: "2026-09-01T00:00:00Z"
+          DFLOW_DATASET_SCAN_BEFORE: "2026-10-08T00:00:00Z"
+          DFLOW_DATASET_TX_LIMIT_PER_ORDER: "4"
+          DFLOW_DATASET_MAX_RUNTIME_MS: "150000"
+          DFLOW_DATASET_INSTRUCTION_EXAMPLE_LIMIT: "1000"
+          DFLOW_DATASET_OUTPUT: artifacts/dflow-mainnet-recent.json
+        run: node scripts/collect-dflow-mainnet.mjs
+      - name: Check active-market candidates
+        run: node scripts/discover-dflow-open-markets.mjs
+      - name: Upload discovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dflow-open-market-candidates
+          path: |
+            artifacts/dflow-open-market-candidates.json
+            artifacts/dflow-mainnet-recent.json
+          if-no-files-found: warn
+          retention-days: 14
+
   dflow-cpi-evidence:
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.scope == 'architecture' || inputs.scope == 'full')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     name: DFlow CPI architecture evidence
     runs-on: ubuntu-24.04
     timeout-minutes: 35
