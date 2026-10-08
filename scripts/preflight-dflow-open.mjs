@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { PublicKey } from "@solana/web3.js";
 
 const candidateFile = process.env.DFLOW_CANDIDATES_FILE ?? "artifacts/dflow-open-market-candidates.json";
 const quoteFile = process.env.DFLOW_OPEN_QUOTE_FILE;
@@ -31,12 +30,10 @@ if (!quoteFile) {
       problems.push("input_amount_mismatch");
     }
     if (typeof quote.quotedOutcomeAtoms !== "string" ||
+        !/^[0-9]+$/.test(quote.quotedOutcomeAtoms) ||
         BigInt(quote.quotedOutcomeAtoms) > quoted) {
       problems.push("quoted_outcome_mismatch");
     }
-  }
-  if (quote.sourceUsdc && !PublicKey.isOnCurve(new PublicKey(quote.sourceUsdc).toBytes())) {
-    // PDA token-account addresses can be off-curve; no signer inference is made here.
   }
 }
 
