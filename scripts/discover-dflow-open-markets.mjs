@@ -22,7 +22,16 @@ async function rpc(method, params) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
     });
-    const body = await response.json();
+    const raw = await response.text();
+    let body;
+    try { body = JSON.parse(raw); }
+    catch (error) {
+      if (attempt < 5) {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
+        continue;
+      }
+      throw new Error(`${method}: invalid or truncated RPC JSON response (HTTP ${response.status})`);
+    }
     if (!response.ok || body.error) {
       if ((response.status === 429 || body.error?.code === 429) && attempt < 5) {
         await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
