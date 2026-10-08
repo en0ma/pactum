@@ -110,7 +110,11 @@ const report = {
   sourceEvidence: EVIDENCE,
   scannedWindowStart: evidence.source?.scanAfterUnix ?? null,
   scannedWindowEnd: evidence.source?.scanBeforeUnix ?? null,
-  confirmedTodayUsdcInputOpens: confirmedOpens.length,
+  observedWindowUsdcInputOpens: confirmedOpens.length,
+  scanCoverageComplete: evidence.summary?.scanCoverageComplete ?? false,
+  scannedProgramSignatures: evidence.summary?.scannedProgramSignatures ?? null,
+  windowSignatures: evidence.summary?.windowSignatures ?? null,
+  observedInstructionShapes: evidence.summary?.instructionShapes ?? {},
   observedLedgers: ledgers.length,
   validLedgerAccountsChecked: accountsChecked,
   candidateUsdcInputOpenExamples: candidates.reduce(
