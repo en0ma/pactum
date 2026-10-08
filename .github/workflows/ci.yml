@@ -188,10 +188,10 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Set current UTC observation window
+      - name: Set rolling 200-hour observation window
         run: |
-          echo "DFLOW_DATASET_SCAN_AFTER=$(date -u +%Y-%m-%dT00:00:00Z)" >> "$GITHUB_ENV"
-          echo "DFLOW_DATASET_SCAN_BEFORE=$(date -u -d 'tomorrow' +%Y-%m-%dT00:00:00Z)" >> "$GITHUB_ENV"
+          echo "DFLOW_DATASET_SCAN_AFTER=$(date -u -d '200 hours ago' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "DFLOW_DATASET_SCAN_BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Collect today's confirmed DFlow instructions
         env:
           DFLOW_DATASET_SAMPLE_LIMIT: "10"
