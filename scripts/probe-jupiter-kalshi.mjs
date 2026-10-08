@@ -87,9 +87,39 @@ if (!apiKey) {
   report.btc15mOpenCandidates = report.btc15m.filter(m =>
     /^(open|active|trading)$/i.test(String(m.status ?? ""))
   );
+  // Compare provider-specific crypto listings, without treating Forecast
+  // (bisonfi) markets as Kalshi-backed collateral.
+  report.cryptoProviderComparison = {};
+  for (const [name, path] of [
+    ["kalshi", "/events?provider=kalshi&category=crypto&includeMarkets=true&start=0&end=50"],
+    ["bisonfi15m", "/events?provider=bisonfi&category=crypto&tag=15m&includeMarkets=true&start=0&end=50"],
+  ]) {
+    const found = await request(path);
+    const events = found.ok
+      ? (Array.isArray(found.payload?.data) ? found.payload.data :
+         Array.isArray(found.payload?.events) ? found.payload.events : [])
+      : [];
+    const marketRecords = events.flatMap(e => (e.markets ?? []).map(m => ({
+      eventId: e.eventId ?? e.id ?? null,
+      eventTitle: e.title ?? null,
+      marketId: m.marketId ?? m.id ?? null,
+      marketTitle: m.title ?? null,
+      provider: m.provider ?? e.provider ?? null,
+      status: m.status ?? null,
+      tradable: m.tradable ?? null,
+      outcomeMint: m.outcomeMint ?? null,
+      closeTime: m.closeTime ?? null,
+    })));
+    report.cryptoProviderComparison[name] = {
+      ok: found.ok, httpStatus: found.httpStatus ?? null,
+      error: found.error ?? null, eventCount: events.length,
+      marketCount: marketRecords.length,
+      markets: marketRecords.slice(0, 50),
+    };
+  }
   const status = await request("/trading-status");
   report.tradingStatusRequest = { ok: status.ok, httpStatus: status.httpStatus ?? null, error: status.error ?? null, tradingActive: status.ok ? status.payload.trading_active ?? status.payload.data?.trading_active ?? null : null };
 }
 fs.mkdirSync("artifacts", { recursive: true });
 fs.writeFileSync(OUTPUT, JSON.stringify(report, null, 2) + "\n");
-console.log(JSON.stringify({ credentialAvailable: report.credentialAvailable, eventsRequest: report.eventsRequest, eventsReturned: report.eventsReturned ?? null, kalshiMarkets: report.markets.length, btc15mMatches: report.btc15m?.length ?? 0, btc15mOpenCandidates: report.btc15mOpenCandidates?.length ?? 0, pages: report.pages?.length ?? 0, scanComplete: report.scanComplete ?? false, tradingStatusRequest: report.tradingStatusRequest, output: OUTPUT }));
+console.log(JSON.stringify({ credentialAvailable: report.credentialAvailable, eventsRequest: report.eventsRequest, eventsReturned: report.eventsReturned ?? null, kalshiMarkets: report.markets.length, btc15mMatches: report.btc15m?.length ?? 0, btc15mOpenCandidates: report.btc15mOpenCandidates?.length ?? 0, pages: report.pages?.length ?? 0, scanComplete: report.scanComplete ?? false, cryptoProviderComparison: Object.fromEntries(Object.entries(report.cryptoProviderComparison ?? {}).map(([k,v]) => [k,{ok:v.ok,eventCount:v.eventCount,marketCount:v.marketCount,error:v.error}])), tradingStatusRequest: report.tradingStatusRequest, output: OUTPUT }));
