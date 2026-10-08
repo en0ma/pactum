@@ -40,12 +40,14 @@ function pubkeyAt(data, offset) {
 
 const now = Math.floor(Date.now() / 1000);
 const evidence = JSON.parse(fs.readFileSync(EVIDENCE, "utf8"));
+const confirmedOpens = (evidence.summary?.action64InstructionExamples ?? [])
+  .filter((ix) => ix.actionU64 === "64" && ix.dataLength === 80 &&
+    Array.isArray(ix.accounts) && ix.accounts.length >= 11);
+const otherObserved = (evidence.instructionExamples ?? [])
+  .filter((ix) => ix.actionU64 === "72" && ix.dataLength === 80 &&
+    Array.isArray(ix.accounts) && ix.accounts.length >= 11);
 const ledgers = [...new Set(
-  (evidence.instructionExamples ?? [])
-    .filter((ix) => (ix.actionU64 === "72" || ix.actionU64 === "64") &&
-      ix.dataLength === 80 && Array.isArray(ix.accounts) && ix.accounts.length >= 11)
-    .map((ix) => ix.accounts[1])
-    .filter(Boolean),
+  [...confirmedOpens, ...otherObserved].map((ix) => ix.accounts[1]).filter(Boolean),
 )].slice(0, 100);
 
 const candidates = [];
@@ -106,6 +108,9 @@ const report = {
   source: "solana-mainnet-rpc-only",
   observedAtUnix: now,
   sourceEvidence: EVIDENCE,
+  scannedWindowStart: evidence.source?.scanAfterUnix ?? null,
+  scannedWindowEnd: evidence.source?.scanBeforeUnix ?? null,
+  confirmedTodayUsdcInputOpens: confirmedOpens.length,
   observedLedgers: ledgers.length,
   validLedgerAccountsChecked: accountsChecked,
   candidateUsdcInputOpenExamples: candidates.reduce(
