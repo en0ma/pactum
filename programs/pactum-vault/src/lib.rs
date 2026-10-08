@@ -427,8 +427,10 @@ pub mod pactum_vault {
     /// market, side, amount, quote, and timing. Pactum requires that market
     /// data to agree with the independently maintained market registry before
     /// it applies vault risk limits. VaultAuthorityPDA then grants the keeper
-    /// an exact, instruction-scoped SPL delegate allowance, calls DFlow, and
-    /// revokes the allowance before this instruction can commit.
+    /// an exact, instruction-scoped SPL delegate allowance and signs only the
+    /// DFlow fill/refund recipient roles, keeping all terminal assets in
+    /// PDA-owned custody. The allowance is revoked before this instruction can
+    /// commit.
     pub fn execute_trade(
         ctx: Context<ExecuteTrade>,
         order_data: [u8; dflow::prediction_v1::OPEN_USER_ORDER_DATA_LEN],
@@ -506,6 +508,7 @@ pub mod pactum_vault {
         );
 
         let keys = dflow::prediction_v1::OpenOrderKeys {
+            dflow_program: ctx.accounts.dflow_program.key(),
             event_authority: ctx.accounts.event_authority.key(),
             market_ledger: ctx.accounts.market_ledger.key(),
             market_usdc_account: ctx.accounts.market_usdc_account.key(),
@@ -513,6 +516,8 @@ pub mod pactum_vault {
             usdc_mint: ctx.accounts.usdc_mint.key(),
             source_usdc: ctx.accounts.vault_usdc.key(),
             token_authority: ctx.accounts.keeper.key(),
+            fill_recipient: ctx.accounts.vault_authority.key(),
+            refund_recipient: ctx.accounts.vault_authority.key(),
             token_program: ctx.accounts.token_program.key(),
             system_program: ctx.accounts.system_program.key(),
         };
@@ -521,6 +526,7 @@ pub mod pactum_vault {
             &ctx.accounts.approved_market,
             ctx.accounts.vault_usdc.key(),
             ctx.accounts.keeper.key(),
+            ctx.accounts.vault_authority.key(),
         )?;
 
         let authority_bump = [ctx.accounts.config.vault_authority_bump];
@@ -552,24 +558,26 @@ pub mod pactum_vault {
         let ix = Instruction {
             program_id: dflow::DFLOW_PREDICTION_MARKETS,
             accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.dflow_program.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
-                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.market_ledger.key(), false),
                 AccountMeta::new(ctx.accounts.market_usdc_account.key(), false),
                 AccountMeta::new(ctx.accounts.order_account.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
                 AccountMeta::new(ctx.accounts.vault_usdc.key(), false),
                 AccountMeta::new(ctx.accounts.keeper.key(), true),
-                AccountMeta::new(ctx.accounts.keeper.key(), true),
-                AccountMeta::new(ctx.accounts.keeper.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
+                AccountMeta::new_readonly(ctx.accounts.vault_authority.key(), true),
                 AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
             ],
             data: order_data.to_vec(),
         };
 
-        invoke(
+        solana_cpi::invoke_signed(
             &ix,
             &[
+                ctx.accounts.dflow_program.to_account_info(),
                 ctx.accounts.event_authority.to_account_info(),
                 ctx.accounts.market_ledger.to_account_info(),
                 ctx.accounts.market_usdc_account.to_account_info(),
@@ -577,10 +585,11 @@ pub mod pactum_vault {
                 ctx.accounts.usdc_mint.to_account_info(),
                 ctx.accounts.vault_usdc.to_account_info(),
                 ctx.accounts.keeper.to_account_info(),
+                ctx.accounts.vault_authority.to_account_info(),
                 ctx.accounts.token_program.to_account_info(),
                 ctx.accounts.system_program.to_account_info(),
-                ctx.accounts.dflow_program.to_account_info(),
             ],
+            signer_seeds,
         )?;
 
         token::revoke(CpiContext::new_with_signer(
@@ -867,8 +876,9 @@ pub mod pactum_vault {
         let ix = Instruction {
             program_id: dflow::DFLOW_PREDICTION_MARKETS,
             accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.dflow_program.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
-                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.market_ledger.key(), false),
                 AccountMeta::new(ctx.accounts.settlement_vault.key(), false),
                 AccountMeta::new(ctx.accounts.outcome_account.key(), false),
                 AccountMeta::new(ctx.accounts.vault_usdc.key(), false),
@@ -887,6 +897,7 @@ pub mod pactum_vault {
         solana_cpi::invoke_signed(
             &ix,
             &[
+                ctx.accounts.dflow_program.to_account_info(),
                 ctx.accounts.event_authority.to_account_info(),
                 ctx.accounts.market_ledger.to_account_info(),
                 ctx.accounts.settlement_vault.to_account_info(),
@@ -1105,8 +1116,9 @@ pub mod pactum_vault {
         let ix = Instruction {
             program_id: dflow::DFLOW_PREDICTION_MARKETS,
             accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.dflow_program.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
-                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.market_ledger.key(), false),
                 AccountMeta::new(ctx.accounts.market_usdc_account.key(), false),
                 AccountMeta::new(ctx.accounts.order_account.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
@@ -1126,6 +1138,7 @@ pub mod pactum_vault {
         solana_cpi::invoke_signed(
             &ix,
             &[
+                ctx.accounts.dflow_program.to_account_info(),
                 ctx.accounts.event_authority.to_account_info(),
                 ctx.accounts.market_ledger.to_account_info(),
                 ctx.accounts.market_usdc_account.to_account_info(),
@@ -1186,8 +1199,9 @@ pub mod pactum_vault {
         let ix = Instruction {
             program_id: dflow::DFLOW_PREDICTION_MARKETS,
             accounts: vec![
+                AccountMeta::new_readonly(ctx.accounts.dflow_program.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.event_authority.key(), false),
-                AccountMeta::new(ctx.accounts.market_ledger.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.market_ledger.key(), false),
                 AccountMeta::new(ctx.accounts.market_usdc_account.key(), false),
                 AccountMeta::new(ctx.accounts.order_account.key(), false),
                 AccountMeta::new_readonly(ctx.accounts.usdc_mint.key(), false),
@@ -1204,6 +1218,7 @@ pub mod pactum_vault {
         solana_cpi::invoke_signed(
             &ix,
             &[
+                ctx.accounts.dflow_program.to_account_info(),
                 ctx.accounts.event_authority.to_account_info(),
                 ctx.accounts.market_ledger.to_account_info(),
                 ctx.accounts.market_usdc_account.to_account_info(),
