@@ -35,35 +35,55 @@ async function request(path) {
 if (!apiKey) {
   report.note = "JUPITER_API_KEY is unavailable; no Jupiter API requests were made. Configure the secret and explicitly run this read-only probe.";
 } else {
-  const events = await request("/events?provider=kalshi&includeMarkets=true&start=0&end=50");
-  report.eventsRequest = { ok: events.ok, httpStatus: events.httpStatus ?? null, error: events.error ?? null };
-  if (events.ok) {
-    const values = Array.isArray(events.payload?.data) ? events.payload.data :
-      Array.isArray(events.payload?.events) ? events.payload.events : [];
-    report.eventsReturned = values.length;
-    for (const event of values) {
+  const pageSize = 50;
+  const maxPages = Math.max(1, Math.min(20, Number(process.env.JUPITER_KALSHI_MAX_PAGES ?? 10)));
+  const seen = new Set();
+  report.pages = [];
+  report.eventsReturned = 0;
+  report.btc15m = [];
+  for (let page = 0; page < maxPages; page++) {
+    const start = page * pageSize;
+    const result = await request(`/events?provider=kalshi&includeMarkets=true&start=${start}&end=${start + pageSize}`);
+    const entries = result.ok
+      ? (Array.isArray(result.payload?.data) ? result.payload.data :
+         Array.isArray(result.payload?.events) ? result.payload.events : [])
+      : [];
+    report.pages.push({ start, end: start + pageSize, httpStatus: result.httpStatus ?? null,
+      ok: result.ok, received: entries.length, error: result.error ?? null });
+    if (page === 0) report.eventsRequest = report.pages[0];
+    if (!result.ok) break;
+    report.eventsReturned += entries.length;
+    for (const event of entries) {
       const nested = Array.isArray(event.markets) ? event.markets : [];
       for (const market of nested) {
         if (market.provider !== "kalshi" && event.provider !== "kalshi") continue;
-        report.markets.push({
-          eventId: event.eventId ?? event.id ?? null,
-          marketId: market.marketId ?? market.id ?? null,
-          provider: market.provider ?? event.provider,
+        const id = String(market.marketId ?? market.id ?? "");
+        const eventId = String(event.eventId ?? event.id ?? "");
+        const identity = eventId + ":" + id;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        const record = {
+          eventId, marketId: id, provider: market.provider ?? event.provider,
           status: market.status ?? null,
-          title: market.title ?? null,
-          openTime: market.openTime ?? null,
-          closeTime: market.closeTime ?? null,
-        });
+          title: market.title ?? event.title ?? null,
+          openTime: market.openTime ?? null, closeTime: market.closeTime ?? null,
+        };
+        report.markets.push(record);
+        // Include nested event/market identifiers, ticker and description without
+        // assuming the API's title necessarily contains the Kalshi series code.
+        const searchText = [eventId, id, event.title, event.ticker, event.subtitle,
+          event.description, market.title, market.ticker, market.subtitle,
+          market.description, market.externalId, market.kalshiTicker]
+          .filter(Boolean).join(" ");
+        if (/KXBTC15M|(?:BTC|BITCOIN)[\\s_-]*(?:15[\\s_-]*(?:M|MIN(?:UTE)?S?))/i.test(searchText)) {
+          report.btc15m.push({ ...record, matchedOn: searchText.slice(0, 350) });
+        }
       }
     }
+    if (entries.length < pageSize) break;
   }
-  // Kalshi's rolling Bitcoin 15-minute series: KXBTC15M.
-  // A listed market is not automatically open or eligible for order construction.
-  report.btc15m = report.markets.filter(m =>
-    /KXBTC15M|BTC\\s*15\\s*MIN|BITCOIN\\s*15\\s*MIN/i.test(
-      [m.marketId, m.eventId, m.title].filter(Boolean).join(" ")
-    )
-  );
+  report.scanComplete = report.pages.length < maxPages &&
+    report.pages.at(-1)?.ok === true && report.pages.at(-1)?.received < pageSize;
   report.btc15mOpenCandidates = report.btc15m.filter(m =>
     /^(open|active|trading)$/i.test(String(m.status ?? ""))
   );
@@ -72,4 +92,4 @@ if (!apiKey) {
 }
 fs.mkdirSync("artifacts", { recursive: true });
 fs.writeFileSync(OUTPUT, JSON.stringify(report, null, 2) + "\n");
-console.log(JSON.stringify({ credentialAvailable: report.credentialAvailable, eventsRequest: report.eventsRequest, eventsReturned: report.eventsReturned ?? null, kalshiMarkets: report.markets.length, btc15mMatches: report.btc15m?.length ?? 0, btc15mOpenCandidates: report.btc15mOpenCandidates?.length ?? 0, tradingStatusRequest: report.tradingStatusRequest, output: OUTPUT }));
+console.log(JSON.stringify({ credentialAvailable: report.credentialAvailable, eventsRequest: report.eventsRequest, eventsReturned: report.eventsReturned ?? null, kalshiMarkets: report.markets.length, btc15mMatches: report.btc15m?.length ?? 0, btc15mOpenCandidates: report.btc15mOpenCandidates?.length ?? 0, pages: report.pages?.length ?? 0, scanComplete: report.scanComplete ?? false, tradingStatusRequest: report.tradingStatusRequest, output: OUTPUT }));
