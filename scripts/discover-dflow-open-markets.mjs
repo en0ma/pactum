@@ -115,6 +115,9 @@ const report = {
   scannedProgramSignatures: evidence.summary?.scannedProgramSignatures ?? null,
   windowSignatures: evidence.summary?.windowSignatures ?? null,
   observedInstructionShapes: evidence.summary?.instructionShapes ?? {},
+  observedDflowCallRoutes: evidence.summary?.transactionRoutes ?? {},
+  observedDflowActions: evidence.summary?.dflowActionCounts ?? {},
+  successfulWindowTransactions: evidence.summary?.successfulWindowTransactions ?? null,
   observedLedgers: ledgers.length,
   validLedgerAccountsChecked: accountsChecked,
   candidateUsdcInputOpenExamples: candidates.reduce(
