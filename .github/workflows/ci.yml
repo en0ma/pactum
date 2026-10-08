@@ -122,14 +122,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install dependencies for unsigned transaction decoding
+        run: npm install --no-audit --no-fund
       - name: Probe Jupiter Kalshi event listing and trading status
         run: node scripts/probe-jupiter-kalshi.mjs
+      - name: Inspect unsigned Kalshi BTC buy order
+        run: node scripts/probe-jupiter-kalshi-order.mjs
       - name: Upload Kalshi discovery evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: jupiter-kalshi-route
-          path: artifacts/jupiter-kalshi-route.json
+          path: |
+            artifacts/jupiter-kalshi-route.json
+            artifacts/jupiter-kalshi-order-inspection.json
           if-no-files-found: warn
           retention-days: 14
 
