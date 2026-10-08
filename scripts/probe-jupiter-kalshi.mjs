@@ -75,7 +75,7 @@ if (!apiKey) {
           event.description, market.title, market.ticker, market.subtitle,
           market.description, market.externalId, market.kalshiTicker]
           .filter(Boolean).join(" ");
-        if (/KXBTC15M|(?:BTC|BITCOIN)[\\s_-]*(?:15[\\s_-]*(?:M|MIN(?:UTE)?S?))/i.test(searchText)) {
+        if (/KXBTC15M|(?:BTC|BITCOIN)[\s_-]*(?:15[\s_-]*(?:M|MIN(?:UTE)?S?))/i.test(searchText)) {
           report.btc15m.push({ ...record, matchedOn: searchText.slice(0, 350) });
         }
       }
