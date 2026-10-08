@@ -3,8 +3,8 @@ import { PublicKey } from "@solana/web3.js";
 
 // Read only DFlow-owned on-chain market state. A zero status byte is a
 // candidate, not proof that a fresh OpenUserOrder can execute.
-const URL = process.env.MAINNET_RPC_URL;
-if (!URL || new URL(URL).hostname === "api.mainnet-beta.solana.com") {
+const RPC_URL = process.env.MAINNET_RPC_URL;
+if (!RPC_URL || new URL(RPC_URL).hostname === "api.mainnet-beta.solana.com") {
   throw new Error("A private MAINNET_RPC_URL is required");
 }
 const PROGRAM = "pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb";
@@ -16,7 +16,7 @@ let rpcId = 0;
 
 async function rpc(method, params) {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const response = await fetch(URL, {
+    const response = await fetch(RPC_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
