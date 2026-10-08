@@ -202,8 +202,6 @@ jobs:
           DFLOW_DATASET_INSTRUCTION_EXAMPLE_LIMIT: "1000"
           DFLOW_DATASET_OUTPUT: artifacts/dflow-mainnet-recent.json
         run: node scripts/collect-dflow-mainnet.mjs
-      - name: Inventory DFlow and World prediction routes
-        run: node scripts/inventory-dflow-program-routes.mjs
       - name: Check active-market candidates
         run: node scripts/discover-dflow-open-markets.mjs
       - name: Check USDC-input open readiness
@@ -217,7 +215,6 @@ jobs:
             artifacts/dflow-open-market-candidates.json
             artifacts/dflow-open-preflight.json
             artifacts/dflow-mainnet-recent.json
-            artifacts/dflow-program-route-inventory.json
           if-no-files-found: warn
           retention-days: 14
 
