@@ -50,6 +50,14 @@ const ledgers = [...new Set(
 
 const candidates = [];
 let accountsChecked = 0;
+const openActionExamples = (evidence.summary?.action64InstructionExamples ?? [])
+  .filter((example) => Array.isArray(example.accounts) && example.accounts.length >= 11);
+const openExamplesByLedger = new Map();
+for (const example of openActionExamples) {
+  const ledger = example.accounts[1];
+  if (!ledger) continue;
+  openExamplesByLedger.set(ledger, (openExamplesByLedger.get(ledger) ?? 0) + 1);
+}
 for (let start = 0; start < ledgers.length; start += 20) {
   const batch = ledgers.slice(start, start + 20);
   const response = await rpc("getMultipleAccounts", [
@@ -86,6 +94,8 @@ for (let start = 0; start < ledgers.length; start += 20) {
       statusByte564: data[564],
       relationshipVerified: true,
       executableOpenVerified: false,
+      matchingUsdcInputOpenExamples: openExamplesByLedger.get(batch[i]) ?? 0,
+      requiresFreshAction64Payload: true,
     });
     if (candidates.length >= MAX_CANDIDATES) break;
   }
@@ -98,8 +108,11 @@ const report = {
   sourceEvidence: EVIDENCE,
   observedLedgers: ledgers.length,
   validLedgerAccountsChecked: accountsChecked,
+  candidateUsdcInputOpenExamples: candidates.reduce(
+    (sum, candidate) => sum + candidate.matchingUsdcInputOpenExamples, 0
+  ),
   candidates,
-  warning: "Zero status byte and verified USDC rail are only screening signals. A successful DFlow OpenUserOrder on an actually active market is still required.",
+  warning: "Zero status byte and verified USDC rail are screening signals, not proof of a tradable market. Historical action 0x48 is not an action 0x40 USDC-input quote. Fresh 0x40 data and a successful direct DFlow simulation are required before Pactum execution.",
 };
 fs.mkdirSync("artifacts", { recursive: true });
 fs.writeFileSync(OUTPUT, JSON.stringify(report, null, 2) + "\n");
