@@ -57,9 +57,19 @@ if (!apiKey) {
       }
     }
   }
+  // Kalshi's rolling Bitcoin 15-minute series: KXBTC15M.
+  // A listed market is not automatically open or eligible for order construction.
+  report.btc15m = report.markets.filter(m =>
+    /KXBTC15M|BTC\\s*15\\s*MIN|BITCOIN\\s*15\\s*MIN/i.test(
+      [m.marketId, m.eventId, m.title].filter(Boolean).join(" ")
+    )
+  );
+  report.btc15mOpenCandidates = report.btc15m.filter(m =>
+    /^(open|active|trading)$/i.test(String(m.status ?? ""))
+  );
   const status = await request("/trading-status");
   report.tradingStatusRequest = { ok: status.ok, httpStatus: status.httpStatus ?? null, error: status.error ?? null, tradingActive: status.ok ? status.payload.trading_active ?? status.payload.data?.trading_active ?? null : null };
 }
 fs.mkdirSync("artifacts", { recursive: true });
 fs.writeFileSync(OUTPUT, JSON.stringify(report, null, 2) + "\n");
-console.log(JSON.stringify({ credentialAvailable: report.credentialAvailable, eventsRequest: report.eventsRequest, eventsReturned: report.eventsReturned ?? null, kalshiMarkets: report.markets.length, tradingStatusRequest: report.tradingStatusRequest, output: OUTPUT }));
+console.log(JSON.stringify({ credentialAvailable: report.credentialAvailable, eventsRequest: report.eventsRequest, eventsReturned: report.eventsReturned ?? null, kalshiMarkets: report.markets.length, btc15mMatches: report.btc15m?.length ?? 0, btc15mOpenCandidates: report.btc15mOpenCandidates?.length ?? 0, tradingStatusRequest: report.tradingStatusRequest, output: OUTPUT }));
