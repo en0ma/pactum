@@ -429,7 +429,7 @@ mod tests {
         let vault_authority = Pubkey::new_unique();
 
         let keys = OpenOrderKeys {
-            dflow_program: super::DFLOW_PREDICTION_MARKETS,
+            dflow_program: crate::dflow::DFLOW_PREDICTION_MARKETS,
             event_authority: EVENT_AUTHORITY,
             market_ledger: market.market_ledger,
             market_usdc_account: Pubkey::new_unique(),
