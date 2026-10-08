@@ -152,6 +152,20 @@ jobs:
           DFLOW_DATASET_OUTPUT: artifacts/dflow-mainnet-${{ matrix.window }}.json
         run: node scripts/collect-dflow-mainnet.mjs
 
+      - name: Discover active-market candidates from on-chain state
+        if: matrix.window == 'recent'
+        continue-on-error: true
+        run: node scripts/discover-dflow-open-markets.mjs
+
+      - name: Upload active-market candidate report
+        if: always() && matrix.window == 'recent'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dflow-open-market-candidates
+          path: artifacts/dflow-open-market-candidates.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload DFlow mainnet evidence
         if: always()
         uses: actions/upload-artifact@v4
