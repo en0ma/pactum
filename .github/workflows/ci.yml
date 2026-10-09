@@ -13,7 +13,7 @@ on:
         default: discovery
         options:
           - discovery
-          - jupiter
+          - dflow-quote
           - architecture
           - evidence
           - full
@@ -110,32 +110,32 @@ jobs:
             exit 1
           fi
 
-  jupiter-kalshi-discovery:
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'jupiter') }}
-    name: Jupiter Kalshi API discovery (read-only)
+  dflow-quote-inspection:
+    if: ${{ github.event_name == 'pull_request' }}
+    name: DFlow unsigned quote inspection (read-only)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
+      DFLOW_API_KEY: ${{ secrets.DFLOW_API_KEY }}
+      DFLOW_PROBE_OUTPUT_MINT: ${{ vars.DFLOW_PROBE_OUTPUT_MINT }}
+      DFLOW_PROBE_USER: ${{ vars.DFLOW_PROBE_USER }}
+      DFLOW_EXPECTED_VAULT_AUTHORITY: ${{ vars.DFLOW_EXPECTED_VAULT_AUTHORITY }}
+      MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install dependencies for unsigned transaction decoding
-        run: npm install --no-audit --no-fund
-      - name: Probe Jupiter Kalshi event listing and trading status
-        run: node scripts/probe-jupiter-kalshi.mjs
-      - name: Inspect unsigned Kalshi BTC buy order
-        run: node scripts/probe-jupiter-kalshi-order.mjs
-      - name: Upload Kalshi discovery evidence
+      - name: Install Solana transaction decoder
+        run: npm ci --no-audit --no-fund
+      - name: Probe DFlow unsigned quote and inspect accounts
+        run: node scripts/probe-dflow-quote-inspection.mjs
+      - name: Upload DFlow quote inspection
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jupiter-kalshi-route
-          path: |
-            artifacts/jupiter-kalshi-route.json
-            artifacts/jupiter-kalshi-order-inspection.json
+          name: dflow-quote-inspection
+          path: artifacts/dflow-quote-inspection.json
           if-no-files-found: warn
           retention-days: 14
 
