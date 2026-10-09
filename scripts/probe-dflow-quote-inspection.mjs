@@ -28,7 +28,8 @@ async function main() {
     const query = new URLSearchParams({ inputMint: USDC, outputMint: mint,
       userPublicKey: wallet, amount,
       slippageBps: process.env.DFLOW_PROBE_SLIPPAGE_BPS ?? "100" });
-    if (expectedVault) query.set("destinationWallet", validKey(expectedVault));
+    if (expectedVault) { query.set("destinationWallet", validKey(expectedVault)); query.set("revertWallet", validKey(expectedVault)); }
+    query.set("includeAddressLookupTables", "true");
     const response = await fetch(new URL("/order?" + query, api), {
       headers: { "x-api-key": process.env.DFLOW_API_KEY },
       signal: AbortSignal.timeout(12000) });
@@ -86,7 +87,7 @@ async function main() {
       msg.isAccountWritable(i),
   }));
   report.transactionPresent = true;
-  report.accountInspection = { version, feePayer: keyAt(0), accounts,
+  report.accountInspection = { version, feePayer: keyAt(0), requiredSigners: accounts.filter(a=>a.signer).map(a=>a.pubkey), accounts,
     addressLookupTables: (msg.addressTableLookups ?? []).map(l=>l.accountKey.toBase58()),
     lookupTablesResolved: resolved !== null, instructions,
     containsDflowPredictionProgram: instructions.some(ix=>ix.programId===PROGRAM) };
@@ -95,10 +96,12 @@ async function main() {
   if (expectedKeeper && !accounts.some(a=>a.pubkey===expectedKeeper && a.signer))
     violations.push("Expected keeper is not a required signer");
   if (expectedVault) {
-    for (const role of ["destinationWallet","revertWallet","refundWallet"]) {
-      if (!report.apiRoles[role]) violations.push(role+" absent from API metadata; cannot attest custody");
-      else if (report.apiRoles[role] !== expectedVault) violations.push(role+" mismatches expected vault");
+    if (accounts.some(a=>a.pubkey===expectedVault && a.signer)) violations.push("Vault PDA is required as top-level signer");
+    for (const role of ["destinationWallet","revertWallet"]) {
+      if (report.apiRoles[role] && report.apiRoles[role] !== expectedVault) violations.push(role+" mismatches expected vault");
+      if (!report.apiRoles[role]) violations.push(role+" not echoed by API; inspect DFlow instruction accounts");
     }
+    if (report.apiRoles.destinationWalletMustSign === true) violations.push("API requires destination wallet signer");
   } else violations.push("No expected vault authority configured");
   if (!report.accountInspection.containsDflowPredictionProgram) violations.push("Legacy DFlow PM program not seen in instructions (router route possible)");
   if (body.executionMode !== "async") violations.push("Async execution mode not explicitly confirmed");
