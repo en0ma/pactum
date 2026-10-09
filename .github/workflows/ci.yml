@@ -111,7 +111,7 @@ jobs:
           fi
 
   dflow-quote-inspection:
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'dflow-quote') }}
     name: DFlow unsigned quote inspection (read-only)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -127,7 +127,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install Solana transaction decoder
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
       - name: Probe DFlow unsigned quote and inspect accounts
         run: node scripts/probe-dflow-quote-inspection.mjs
       - name: Upload DFlow quote inspection
