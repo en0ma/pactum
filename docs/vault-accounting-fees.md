@@ -1,5 +1,15 @@
 # Vault V2 accounting: trade-open participation and settlement waterfall
 
+## Superseding decision: immediate active deposits, trade-open snapshots
+
+The earlier pending-deposit queue is **superseded as the target UX**. Deposits should be accepted as active capital immediately and participate in the **next trade opened after the deposit**, without claiming wins or losses from any already-open trades. Existing pending-deposit instructions remain experimental code for now, not the desired final deposit route.
+
+Every trade must record immutable opening-state data: the vault, DFlow order identity, active share supply, trading bot and fee split in force when it opened. Each depositor's eligibility must likewise be checkpointed **at opening**, or proven from a tamper-resistant per-user share-history mechanism. Neither current share balances nor a global NAV after settlement can reconstruct earlier ownership.
+
+**Critical:** trade-opening snapshots alone are insufficient to allow unrestricted same-pool deposits: if late capital is minted at liquid-USDC-only NAV while outstanding positions exist, the new shares may purchase claims on old positions and dilute previous owners. The implementation must combine snapshot PnL attribution with cohort-aware NAV/claim accounting and withdrawal constraints. Only then can the exposure-open rejection in `deposit_vault_v2` be removed. Capital deposited after one trade opens may finance a subsequent trade, but is never retroactively assigned to the prior trade.
+
+Prototype arithmetic `pnl_for_trade_open_shares` and negative tests now demonstrate the entitlement rule; this is not the full on-chain entitlement ledger or a production deposit handler.
+
 ## Product rules confirmed
 
 1. Each vault independently defines a bot's performance-fee share; every vault reads the same protocol market registry.
