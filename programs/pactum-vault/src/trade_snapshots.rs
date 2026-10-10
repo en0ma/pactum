@@ -29,6 +29,28 @@ impl OrderRecordV2 {
     pub const LEN:usize=32+32+1+1+8+2+32+8+8+2+32+32+8+8+8+8+8+1+1;
 }
 
+/// Read-only on-chain examination of the canonical *live* DFlow order.
+/// Explicitly verifies its real account owner, size and identity, rather
+/// than trusting an RPC/keeper representation. Does not decode unsupported
+/// fill/refund offsets or authorize ledger changes.
+#[derive(Accounts)]
+pub struct VerifyLiveDflowOrderV2<'info> {
+    #[account(seeds=[b"vault",vault.vault_id.as_ref()],bump=vault.config_bump)]
+    pub vault: Account<'info,VaultV2>,
+    #[account(seeds=[b"v2_order",vault.key().as_ref(),order.order_id.as_ref()],
+        bump=order.bump,
+        constraint=order.vault==vault.key() @ PactumError::InvalidMarketExposure)]
+    pub order: Account<'info,OrderRecordV2>,
+    /// CHECK: Actual DFlow program ownership and live account layout verified below.
+    pub dflow_order_account: UncheckedAccount<'info>,
+}
+pub fn verify_live_order(ctx:Context<VerifyLiveDflowOrderV2>)->Result<()> {
+    let account=&ctx.accounts.dflow_order_account;
+    crate::trade_events::verify_live_dflow_order_account(
+        ctx.accounts.order.order_account,account.key(),*account.owner,
+        account.lamports(),account.data_len())
+}
+
 /// Permissionless terminalization: no keeper-reported amount is accepted.
 /// Only an already-reconciled order with a canonically closed DFlow order
 /// account can become terminal. No token transfers or fee side effects.
