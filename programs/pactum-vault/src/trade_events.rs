@@ -42,9 +42,76 @@ pub fn validate_event_record(
     }
     Ok(())
 }
+/// Cumulative execution totals for one order. These are accounting state,
+/// not authority to mint a trade event from unverified bot assertions.
+#[derive(AnchorSerialize,AnchorDeserialize,Clone,Copy,Debug,Default,PartialEq,Eq)]
+pub struct OrderReconciliationV2 {
+    pub filled_usdc:u64,
+    pub outcome_atoms:u64,
+    pub refunded_usdc:u64,
+    pub event_count:u64,
+    pub terminal:bool,
+}
+impl OrderReconciliationV2 {
+    /// Apply a single authenticated, uniquely identified event.
+    /// The caller MUST verify that the event PDA is initialized only once
+    /// and the fill/refund amounts are supported by DFlow state and custody.
+    pub fn apply(&mut self, order_input_usdc:u64, kind:u8,
+        fill_usdc:u64, outcome_atoms:u64, refund_usdc:u64,
+        terminal:bool)->Result<()> {
+        require!(!self.terminal,PactumError::InvalidDflowRefund);
+        require!(kind==EVENT_FILL || kind==EVENT_REFUND,PactumError::InvalidDflowFixture);
+        let new_filled=self.filled_usdc.checked_add(fill_usdc).ok_or(PactumError::MathOverflow)?;
+        let new_refunded=self.refunded_usdc.checked_add(refund_usdc).ok_or(PactumError::MathOverflow)?;
+        let new_outcome=self.outcome_atoms.checked_add(outcome_atoms).ok_or(PactumError::MathOverflow)?;
+        require!(new_filled.checked_add(new_refunded).ok_or(PactumError::MathOverflow)?
+            <=order_input_usdc,PactumError::InvalidDflowRefund);
+        match kind {
+            EVENT_FILL => require!(fill_usdc>0 && outcome_atoms>0 && refund_usdc==0,
+                PactumError::InvalidDflowFixture),
+            EVENT_REFUND => require!(refund_usdc>0 && fill_usdc==0 && outcome_atoms==0,
+                PactumError::InvalidDflowFixture),
+            _=>return err!(PactumError::InvalidDflowFixture),
+        }
+        if terminal {
+            require!(new_filled.checked_add(new_refunded).ok_or(PactumError::MathOverflow)?
+                ==order_input_usdc,PactumError::InvalidDflowRefund);
+        }
+        self.filled_usdc=new_filled;
+        self.refunded_usdc=new_refunded;
+        self.outcome_atoms=new_outcome;
+        self.event_count=self.event_count.checked_add(1).ok_or(PactumError::MathOverflow)?;
+        self.terminal=terminal;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
  use super::*;
+ #[test] fn partial_fills_refund_and_terminal_reconciliation() {
+  let mut a=OrderReconciliationV2::default();
+  a.apply(100,EVENT_FILL,30,240,0,false).unwrap();
+  a.apply(100,EVENT_FILL,40,320,0,false).unwrap();
+  a.apply(100,EVENT_REFUND,0,0,30,true).unwrap();
+  assert_eq!(a.filled_usdc,70);
+  assert_eq!(a.refunded_usdc,30);
+  assert_eq!(a.outcome_atoms,560);
+  assert_eq!(a.event_count,3);
+  assert!(a.terminal);
+  assert!(a.apply(100,EVENT_REFUND,0,0,1,true).is_err());
+ }
+ #[test] fn rejects_overfill_early_terminal_and_invalid_events() {
+  let mut a=OrderReconciliationV2::default();
+  assert!(a.apply(100,EVENT_FILL,101,50,0,false).is_err());
+  assert!(a.apply(100,EVENT_FILL,40,50,0,true).is_err());
+  assert!(a.apply(100,EVENT_REFUND,10,0,10,false).is_err());
+  assert_eq!(a,OrderReconciliationV2::default());
+  a.apply(100,EVENT_FILL,80,100,0,false).unwrap();
+  assert!(a.apply(100,EVENT_REFUND,0,0,21,true).is_err());
+  assert_eq!(a.filled_usdc,80);
+  assert_eq!(a.refunded_usdc,0);
+ }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
   assert_ne!(trade_event_address(a,id),trade_event_address(b,id));
