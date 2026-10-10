@@ -49,10 +49,23 @@ pub struct VaultV2Position {
     pub shares: u64,
     /// Vault share-ledger revision at most recent share mutation.
     pub share_revision: u64,
+    pub share_mutations: u64,
     pub pending_usdc: u64,
     pub bump: u8,
 }
-impl VaultV2Position { pub const LEN: usize = 32 + 8 + 8 + 8 + 1; }
+impl VaultV2Position { pub const LEN: usize = 32 + 8 + 8 + 8 + 8 + 1; }
+
+/// Append-only proof of post-mutation shares.
+#[account]
+pub struct ShareCheckpointV2 {
+    pub vault: Pubkey,
+    pub depositor: Pubkey,
+    pub mutation_index: u64,
+    pub vault_revision: u64,
+    pub shares_after: u64,
+    pub bump: u8,
+}
+impl ShareCheckpointV2 { pub const LEN: usize = 32 + 32 + 8 + 8 + 8 + 1; }
 
 #[derive(Accounts)]
 #[instruction(vault_id: [u8; 32])]
@@ -97,6 +110,10 @@ pub struct DepositVaultV2<'info> {
     #[account(init_if_needed, payer=user, space=8+VaultV2Position::LEN,
         seeds=[b"v2_position", vault.key().as_ref(), user.key().as_ref()], bump)]
     pub position: Account<'info, VaultV2Position>,
+    #[account(init, payer=user, space=8+ShareCheckpointV2::LEN,
+        seeds=[b"share_checkpoint", position.key().as_ref(),
+            position.share_mutations.to_le_bytes().as_ref()], bump)]
+    pub share_checkpoint: Account<'info, ShareCheckpointV2>,
     #[account(address=dflow::USDC_MINT)] pub usdc_mint: Account<'info, Mint>,
     #[account(mut, token::mint=usdc_mint, token::authority=user)]
     pub user_usdc: Account<'info, TokenAccount>,
@@ -116,6 +133,10 @@ pub struct WithdrawVaultV2<'info> {
     #[account(mut, seeds=[b"v2_position", vault.key().as_ref(), user.key().as_ref()],
         bump=position.bump, constraint=position.owner==user.key())]
     pub position: Account<'info, VaultV2Position>,
+    #[account(init, payer=user, space=8+ShareCheckpointV2::LEN,
+        seeds=[b"share_checkpoint", position.key().as_ref(),
+            position.share_mutations.to_le_bytes().as_ref()], bump)]
+    pub share_checkpoint: Account<'info, ShareCheckpointV2>,
     #[account(address=dflow::USDC_MINT)] pub usdc_mint: Account<'info, Mint>,
     #[account(mut, token::mint=usdc_mint, token::authority=user)]
     pub user_usdc: Account<'info, TokenAccount>,
@@ -169,7 +190,7 @@ pub struct CancelPendingDepositV2<'info> {
 #[derive(Accounts)]
 pub struct ActivatePendingDepositV2<'info> {
     /// Permissionless activation at a verified no-exposure cutoff.
-    pub caller: Signer<'info>,
+    #[account(mut)] pub caller: Signer<'info>,
     /// CHECK: depositor identity is bound to the position PDA.
     pub depositor: UncheckedAccount<'info>,
     #[account(mut, seeds=[b"vault", vault.vault_id.as_ref()], bump=vault.config_bump)]
@@ -180,6 +201,10 @@ pub struct ActivatePendingDepositV2<'info> {
     #[account(mut, seeds=[b"v2_position", vault.key().as_ref(), depositor.key().as_ref()],
         bump=position.bump, constraint=position.owner==depositor.key())]
     pub position: Account<'info, VaultV2Position>,
+    #[account(init, payer=caller, space=8+ShareCheckpointV2::LEN,
+        seeds=[b"share_checkpoint", position.key().as_ref(),
+            position.share_mutations.to_le_bytes().as_ref()], bump)]
+    pub share_checkpoint: Account<'info, ShareCheckpointV2>,
     #[account(address=dflow::USDC_MINT)] pub usdc_mint: Account<'info, Mint>,
     #[account(mut, address=vault.usdc_vault,
         seeds=[b"vault_usdc", vault.key().as_ref()], bump,
@@ -200,6 +225,7 @@ pub fn request_pending_deposit(ctx: Context<RequestPendingDepositV2>, amount: u6
         p.bump=ctx.bumps.position;
         p.shares=0;
         p.share_revision=0;
+        p.share_mutations=0;
         p.pending_usdc=0;
     }
     require_keys_eq!(p.owner,ctx.accounts.user.key(),PactumError::UnauthorizedAdmin);
@@ -246,6 +272,15 @@ pub fn activate_pending_deposit(ctx: Context<ActivatePendingDepositV2>) -> Resul
     v.total_shares=v.total_shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
     v.share_revision=v.share_revision.checked_add(1).ok_or(PactumError::MathOverflow)?;
     ctx.accounts.position.share_revision=v.share_revision;
+    let cp=&mut ctx.accounts.share_checkpoint;
+    cp.vault=v.key();
+    cp.depositor=ctx.accounts.position.owner;
+    cp.mutation_index=ctx.accounts.position.share_mutations;
+    cp.vault_revision=v.share_revision;
+    cp.shares_after=ctx.accounts.position.shares;
+    cp.bump=ctx.bumps.share_checkpoint;
+    ctx.accounts.position.share_mutations=ctx.accounts.position.share_mutations
+        .checked_add(1).ok_or(PactumError::MathOverflow)?;
     let vault_key=v.key();
     let seeds:&[&[u8]]=&[b"vault_authority",vault_key.as_ref(),&[v.authority_bump]];
     token::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(),
@@ -305,10 +340,21 @@ pub fn deposit(ctx: Context<DepositVaultV2>, amount: u64) -> Result<()> {
     require!(v.open_exposure_usdc==0 && v.open_positions==0, PactumError::ExposureOpen);
     let minted=math::shares_for_deposit(amount,v.total_shares,ctx.accounts.vault_usdc.amount)?;
     let p=&mut ctx.accounts.position;
-    if p.owner==Pubkey::default() { p.owner=ctx.accounts.user.key(); p.bump=ctx.bumps.position; p.pending_usdc=0; p.share_revision=0; }
+    if p.owner==Pubkey::default() { p.owner=ctx.accounts.user.key(); p.bump=ctx.bumps.position; p.pending_usdc=0; p.share_revision=0; p.share_mutations=0; }
     require_keys_eq!(p.owner,ctx.accounts.user.key(),PactumError::UnauthorizedAdmin);
     p.shares=p.shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
     v.total_shares=v.total_shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
+    v.share_revision=v.share_revision.checked_add(1).ok_or(PactumError::MathOverflow)?;
+    ctx.accounts.position.share_revision=v.share_revision;
+    let cp=&mut ctx.accounts.share_checkpoint;
+    cp.vault=v.key();
+    cp.depositor=ctx.accounts.position.owner;
+    cp.mutation_index=ctx.accounts.position.share_mutations;
+    cp.vault_revision=v.share_revision;
+    cp.shares_after=ctx.accounts.position.shares;
+    cp.bump=ctx.bumps.share_checkpoint;
+    ctx.accounts.position.share_mutations=ctx.accounts.position.share_mutations
+        .checked_add(1).ok_or(PactumError::MathOverflow)?;
     token::transfer_checked(CpiContext::new(ctx.accounts.token_program.key(),
         TransferChecked{from:ctx.accounts.user_usdc.to_account_info(),
             mint:ctx.accounts.usdc_mint.to_account_info(),
@@ -327,6 +373,15 @@ pub fn withdraw(ctx: Context<WithdrawVaultV2>, shares: u64) -> Result<()> {
     v.total_shares=v.total_shares.checked_sub(shares).ok_or(PactumError::MathOverflow)?;
     v.share_revision=v.share_revision.checked_add(1).ok_or(PactumError::MathOverflow)?;
     ctx.accounts.position.share_revision=v.share_revision;
+    let cp=&mut ctx.accounts.share_checkpoint;
+    cp.vault=v.key();
+    cp.depositor=ctx.accounts.position.owner;
+    cp.mutation_index=ctx.accounts.position.share_mutations;
+    cp.vault_revision=v.share_revision;
+    cp.shares_after=ctx.accounts.position.shares;
+    cp.bump=ctx.bumps.share_checkpoint;
+    ctx.accounts.position.share_mutations=ctx.accounts.position.share_mutations
+        .checked_add(1).ok_or(PactumError::MathOverflow)?;
     let vault_key=v.key();
     let seeds:&[&[u8]]=&[b"vault_authority",vault_key.as_ref(),&[v.authority_bump]];
     token::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(),
