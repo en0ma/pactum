@@ -10,7 +10,8 @@
     "test:js": "node --test tests/*.test.mjs",
     "test:fork": "node tests/fork-smoke.mjs",
     "test:fork:ci": "bash scripts/run-fork-ci.sh",
-    "inspect:dflow-order": "node scripts/inspect-dflow-order.mjs"
+    "inspect:dflow-order": "node scripts/inspect-dflow-order.mjs",
+    "inspect:dflow-events": "node scripts/inspect-dflow-events.mjs"
   },
   "dependencies": {
     "@solana/web3.js": "1.99.0"
