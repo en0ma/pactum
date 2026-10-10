@@ -20,8 +20,8 @@ pub mod state;
 pub mod v2;
 pub mod trade_snapshots;
 pub mod trade_events;
-pub use trade_snapshots::{RegisterOrderV2,VerifyTradeParticipationV2,FinalizeReconciledOrderV2};
-use trade_snapshots::{__client_accounts_register_order_v2,__client_accounts_verify_trade_participation_v2,__client_accounts_finalize_reconciled_order_v2};
+pub use trade_snapshots::{RegisterOrderV2,VerifyTradeParticipationV2,FinalizeReconciledOrderV2,VerifyLiveDflowOrderV2};
+use trade_snapshots::{__client_accounts_register_order_v2,__client_accounts_verify_trade_participation_v2,__client_accounts_finalize_reconciled_order_v2,__client_accounts_verify_live_dflow_order_v2};
 pub use v2::{CreateVaultV2, ManageVaultV2, DepositVaultV2, WithdrawVaultV2, RequestPendingDepositV2, CancelPendingDepositV2, ActivatePendingDepositV2};
 use v2::{__client_accounts_create_vault_v2, __client_accounts_manage_vault_v2, __client_accounts_deposit_vault_v2, __client_accounts_withdraw_vault_v2, __client_accounts_request_pending_deposit_v2, __client_accounts_cancel_pending_deposit_v2, __client_accounts_activate_pending_deposit_v2};
 
@@ -43,6 +43,10 @@ pub mod pactum_vault {
         ctx: Context<VerifyTradeParticipationV2>,
     ) -> Result<()> {
         trade_snapshots::verify_participation(ctx)
+    }
+
+    pub fn verify_live_dflow_order_v2(ctx:Context<VerifyLiveDflowOrderV2>)->Result<()> {
+        trade_snapshots::verify_live_order(ctx)
     }
 
     pub fn finalize_reconciled_order_v2(ctx:Context<FinalizeReconciledOrderV2>)->Result<()> {
