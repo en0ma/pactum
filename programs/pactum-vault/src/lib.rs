@@ -46,8 +46,9 @@ pub mod pactum_vault {
 
     pub fn open_trade_snapshot_v2(
         ctx: Context<OpenTradeSnapshotV2>, trade_id: [u8;32],
+        input_amount: u64, quoted_outcome_atoms: u64, slippage_bps: u16,
     ) -> Result<()> {
-        trade_snapshots::open(ctx,trade_id)
+        trade_snapshots::open(ctx,trade_id,input_amount,quoted_outcome_atoms,slippage_bps)
     }
 
     pub fn create_vault_v2(ctx: Context<CreateVaultV2>, vault_id: [u8; 32],
