@@ -123,6 +123,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check vault program
         run: cargo check -p pactum-vault --lib
+      - name: Test vault-scoped keeper authorization
+        run: cargo test -p pactum-vault --lib vault_keeper_authorization_tests
 
   dflow-sdk-offline:
     if: ${{ github.event_name == 'pull_request' }}
