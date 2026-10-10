@@ -1,3 +1,12 @@
+## Real June order-to-market mappings recovered
+
+The June archive (CI run #207, artifact `dflow-mainnet-june`, 11532353903) explicitly gives the following DFlow account relationships:
+
+- Partial fill A: order `9UzowLyvmrUyWqnTZiH8zJonWe67CfYfabAg3FgYX1Mj`, market ledger `69xbzeM7ja9CKFSTRrpcEkfHbzB7M4kM5a5hoyezBn7Z`, market USDC `E5kksUWuxJZD1W98q2WCiPXGMaCpETAzwN4FHb5nAX78`.
+- Partial fill B: order `An6C9tE27PdMbioEfJZ5qXNMhU1iSc4pxzGtnQYD6frg`, market ledger `4F7PJWcGYKtnZUgZuCpqQxsxuZVwJm8xZWhJnaNYCAGz`, market USDC `47Xt8dVfj4473cbSjbSCPNKvAqCXCKkejk6t5DteFkNr`.
+
+Those addresses are pinned in the source fixtures. Set `DFLOW_JUNE_CASE=partial-a` or `DFLOW_JUNE_CASE=partial-b` alongside `MAINNET_RPC_URL`, and invoke `npm run inspect:dflow-state` to query the matching real addresses at finalized commitment. This is a **locator/data-provenance improvement**, not a claim that a newly queried market state or durable per-order cumulative fields were already verified. No production settlement permissions changed.
+
 ## Read-only verification of surviving DFlow state
 
 The new `npm run inspect:dflow-state` command queries a finalized Solana RPC node for `DFLOW_ORDER_ACCOUNT` and `DFLOW_MARKET_LEDGER`, with optional `DFLOW_MARKET_USDC_ACCOUNT`, `DFLOW_OUTCOME_TOKEN_ACCOUNT`, and `DFLOW_REFUND_USDC_ACCOUNT`. It records account existence, real program owner, data length and raw base64 account bytes. Supply the **actual addresses from archived opens**; the script does not guess order-to-market association or treat keeper-provided bytes as account state. Unit tests cover a removed 344-byte order account with surviving 568-byte DFlow-owned market ledger, live orders and wrong owner. A surviving market account proves that DFlow state exists, **not** that it stores per-order cumulative fills, refunds, or entitlement ownership. Do not use shared settlement balances as proof of an individual order. The command is read-only and **has not yet been executed against a configured historical-archive RPC in this commit**; previously recovered completed-order account absence comes from run #207's real archived reads.
