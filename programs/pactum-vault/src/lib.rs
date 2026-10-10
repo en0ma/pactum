@@ -858,17 +858,11 @@ pub mod pactum_vault {
         // Never silently cap excess USDC credited to a shared refund account.
         // It could originate from another order or an unsolicited transfer;
         // either case makes this order's terminal refund attribution ambiguous.
-        require!(
-            refund_usdc <= ctx.accounts.pending_order.cost_basis_usdc,
-            PactumError::InvalidDflowRefund
-        );
+        let consumed_usdc = trade_events::checked_terminal_refund(
+            ctx.accounts.pending_order.cost_basis_usdc,
+            refund_usdc,
+        )?;
         let recognized_refund_usdc = refund_usdc;
-        let consumed_usdc = ctx
-            .accounts
-            .pending_order
-            .cost_basis_usdc
-            .checked_sub(recognized_refund_usdc)
-            .ok_or(PactumError::MathOverflow)?;
         let minimum_outcome_atoms = dflow::prediction_v1::minimum_outcome_for_consumed_input(
             ctx.accounts.pending_order.quoted_outcome_atoms,
             ctx.accounts.pending_order.cost_basis_usdc,
