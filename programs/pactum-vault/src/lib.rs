@@ -16,6 +16,7 @@ pub mod dflow;
 pub mod error;
 pub mod math;
 pub mod state;
+pub mod v2;
 
 use error::PactumError;
 use state::{
@@ -28,6 +29,32 @@ declare_id!("AJnBVG77ZQnMLyeTuf9JoKhvaDFzFQZhtCBnzHgWFBTw");
 #[program]
 pub mod pactum_vault {
     use super::*;
+
+    // V2 isolates vault capital and bot permissions while the market registry
+    // remains a single protocol-wide singleton.
+    pub fn create_vault_v2(ctx: Context<v2::CreateVaultV2>, vault_id: [u8; 32],
+        max_trade_usdc: u64, max_total_exposure_usdc: u64,
+        min_liquidity_buffer_usdc: u64) -> Result<()> {
+        v2::create(ctx,vault_id,max_trade_usdc,max_total_exposure_usdc,min_liquidity_buffer_usdc)
+    }
+
+    pub fn set_vault_keeper_v2(ctx: Context<v2::ManageVaultV2>, keeper: Pubkey) -> Result<()> {
+        v2::set_keeper(ctx,keeper)
+    }
+
+    pub fn set_vault_rules_v2(ctx: Context<v2::ManageVaultV2>,
+        max_trade_usdc: u64, max_total_exposure_usdc: u64,
+        min_liquidity_buffer_usdc: u64, paused: bool) -> Result<()> {
+        v2::set_rules(ctx,max_trade_usdc,max_total_exposure_usdc,min_liquidity_buffer_usdc,paused)
+    }
+
+    pub fn deposit_vault_v2(ctx: Context<v2::DepositVaultV2>, amount: u64) -> Result<()> {
+        v2::deposit(ctx,amount)
+    }
+
+    pub fn withdraw_vault_v2(ctx: Context<v2::WithdrawVaultV2>, shares: u64) -> Result<()> {
+        v2::withdraw(ctx,shares)
+    }
 
     pub fn initialize_vault(
         ctx: Context<InitializeVault>,
