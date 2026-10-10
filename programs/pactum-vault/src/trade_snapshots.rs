@@ -1,4 +1,4 @@
-//! Trade-opening entitlement checkpoints (V2).
+//! Vault-scoped order registry and trade-opening entitlement checkpoints (V2).
 //! This records immutable per-vault opening shares, not a DFlow fill.
 //! Snapshot creation is keeper-gated and has no custody or fee side effects.
 use anchor_lang::prelude::*;
@@ -6,9 +6,13 @@ use crate::{dflow, error::PactumError, state::{ApprovedMarket,MarketRegistry}, v
 use anchor_spl::token::{Mint,TokenAccount};
 
 #[account]
-pub struct TradeSnapshotV2 {
+pub struct OrderRecordV2 {
     pub vault: Pubkey,
-    pub trade_id: [u8;32],
+    pub order_id: [u8;32],
+    pub status: u8,
+    pub side: u8,
+    pub quoted_outcome_atoms: u64,
+    pub slippage_bps: u16,
     pub keeper_at_open: Pubkey,
     pub total_shares_at_open: u64,
     /// Vault-wide share revision at the transaction's opening point.
@@ -19,8 +23,8 @@ pub struct TradeSnapshotV2 {
     pub input_amount_usdc: u64,
     pub bump: u8,
 }
-impl TradeSnapshotV2 {
-    pub const LEN:usize=32+32+32+8+8+2+32+32+8+1;
+impl OrderRecordV2 {
+    pub const LEN:usize=32+32+1+1+8+2+32+8+8+2+32+32+8+1;
 }
 
 #[account]
@@ -33,14 +37,14 @@ pub struct TradeParticipantV2 {
 impl TradeParticipantV2 {pub const LEN:usize=32+32+8+1;}
 
 #[derive(Accounts)]
-#[instruction(trade_id:[u8;32])]
-pub struct OpenTradeSnapshotV2<'info> {
+#[instruction(order_id:[u8;32])]
+pub struct RegisterOrderV2<'info> {
     #[account(mut)] pub keeper: Signer<'info>,
     #[account(seeds=[b"vault",vault.vault_id.as_ref()],bump=vault.config_bump)]
     pub vault: Account<'info,VaultV2>,
-    #[account(init,payer=keeper,space=8+TradeSnapshotV2::LEN,
-        seeds=[b"trade_snapshot",vault.key().as_ref(),trade_id.as_ref()],bump)]
-    pub trade: Account<'info,TradeSnapshotV2>,
+    #[account(init,payer=keeper,space=8+OrderRecordV2::LEN,
+        seeds=[b"v2_order",vault.key().as_ref(),order_id.as_ref()],bump)]
+    pub trade: Account<'info,OrderRecordV2>,
     #[account(seeds=[b"market_registry"],bump=market_registry.bump)]
     pub market_registry: Account<'info,MarketRegistry>,
     #[account(seeds=[b"market",approved_market.market_ledger.as_ref()],bump=approved_market.bump)]
@@ -74,9 +78,9 @@ pub struct CheckpointParticipantV2<'info> {
     pub depositor: UncheckedAccount<'info>,
     #[account(seeds=[b"vault",vault.vault_id.as_ref()],bump=vault.config_bump)]
     pub vault: Account<'info,VaultV2>,
-    #[account(seeds=[b"trade_snapshot",vault.key().as_ref(),trade.trade_id.as_ref()],
+    #[account(seeds=[b"v2_order",vault.key().as_ref(),trade.order_id.as_ref()],
         bump=trade.bump,has_one=vault)]
-    pub trade: Account<'info,TradeSnapshotV2>,
+    pub trade: Account<'info,OrderRecordV2>,
     #[account(seeds=[b"v2_position",vault.key().as_ref(),depositor.key().as_ref()],
         bump=position.bump,constraint=position.owner==depositor.key())]
     pub position: Account<'info,VaultV2Position>,
@@ -85,12 +89,12 @@ pub struct CheckpointParticipantV2<'info> {
     pub participant: Account<'info,TradeParticipantV2>,
     pub system_program: Program<'info,System>,
 }
-pub fn open(ctx:Context<OpenTradeSnapshotV2>,trade_id:[u8;32],
+pub fn open(ctx:Context<RegisterOrderV2>,order_id:[u8;32],
     input_amount:u64, quoted_outcome_atoms:u64, slippage_bps:u16)->Result<()> {
     let v=&ctx.accounts.vault;
     v.require_keeper(ctx.accounts.keeper.key())?;
     require!(v.total_shares>0,PactumError::ZeroShares);
-    require!(trade_id==ctx.accounts.order_account.key().to_bytes(),
+    require!(order_id==ctx.accounts.order_account.key().to_bytes(),
         PactumError::InvalidDflowAccounts);
     v.check_trade(input_amount,ctx.accounts.vault_usdc.amount)?;
     let registry=&ctx.accounts.market_registry;
@@ -155,7 +159,11 @@ pub fn open(ctx:Context<OpenTradeSnapshotV2>,trade_id:[u8;32],
         input_amount,quoted_outcome_atoms,slippage_bps)?;
     let t=&mut ctx.accounts.trade;
     t.vault=v.key();
-    t.trade_id=trade_id;
+    t.status=1; // order registered; fill/refund settlement tracked separately
+    t.side=match observed.side { dflow::prediction_v1::OutcomeSide::Yes => b'Y', dflow::prediction_v1::OutcomeSide::No => b'N' };
+    t.quoted_outcome_atoms=quoted_outcome_atoms;
+    t.slippage_bps=slippage_bps;
+    t.order_id=order_id;
     t.keeper_at_open=ctx.accounts.keeper.key();
     t.total_shares_at_open=v.total_shares;
     t.share_revision_at_open=v.share_revision;
@@ -195,9 +203,9 @@ pub struct VerifyTradeParticipationV2<'info> {
     pub depositor: UncheckedAccount<'info>,
     #[account(seeds=[b"vault",vault.vault_id.as_ref()],bump=vault.config_bump)]
     pub vault: Account<'info,VaultV2>,
-    #[account(seeds=[b"trade_snapshot",vault.key().as_ref(),trade.trade_id.as_ref()],
+    #[account(seeds=[b"v2_order",vault.key().as_ref(),trade.order_id.as_ref()],
         bump=trade.bump,has_one=vault)]
-    pub trade: Account<'info,TradeSnapshotV2>,
+    pub trade: Account<'info,OrderRecordV2>,
     #[account(seeds=[b"v2_position",vault.key().as_ref(),depositor.key().as_ref()],
         bump=position.bump,constraint=position.owner==depositor.key())]
     pub position: Account<'info,VaultV2Position>,
@@ -306,8 +314,8 @@ mod tests {
     fn trade_identifiers_are_separate_for_each_vault(){
         let a=Pubkey::new_unique();let b=Pubkey::new_unique();
         let id=[11u8;32];
-        let (x,_)=Pubkey::find_program_address(&[b"trade_snapshot",a.as_ref(),id.as_ref()],&crate::ID);
-        let (y,_)=Pubkey::find_program_address(&[b"trade_snapshot",b.as_ref(),id.as_ref()],&crate::ID);
+        let (x,_)=Pubkey::find_program_address(&[b"v2_order",a.as_ref(),id.as_ref()],&crate::ID);
+        let (y,_)=Pubkey::find_program_address(&[b"v2_order",b.as_ref(),id.as_ref()],&crate::ID);
         assert_ne!(x,y);
     }
     #[test]
