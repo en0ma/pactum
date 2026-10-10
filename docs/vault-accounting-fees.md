@@ -1,3 +1,11 @@
+## Append-only share history (in progress)
+
+V2 share-changing instructions now atomically initialize an immutable `ShareCheckpointV2` PDA for each depositor, keyed by the depositor's position PDA and monotonic `share_mutations` index. It records the post-operation share balance and vault-wide revision. Deposit, withdrawal and pending activation paths each append a checkpoint. This makes the historical share timeline verifiable even if a depositor's share balance later returns to an earlier value.
+
+**Still required:** an on-chain settlement proof that loads the correct *bounding consecutive checkpoints* for the trade-opening revision. A checkpoint without proof of the immediately next mutation could be stale. An initial (zero-share) state must also be handled. The current public `checkpoint_participant_v2` remains disabled, and no live PnL payouts rely on these records.
+
+Changing the layout of `VaultV2` and `VaultV2Position` requires a clean versioned deployment/migration; existing initialized V2 accounts of the older size cannot be silently reused.
+
 ## Monotonic share revision — first historical-integrity gate
 
 `VaultV2.share_revision` now advances on every active share mint or burn, including pending-deposit activation; `VaultV2Position.share_revision` records each affected depositor's latest change. `TradeSnapshotV2.share_revision_at_open` captures the vault's revision at opening. A delayed checkpoint cannot pass merely because shares were minted and later burned back to the same supply: revisions remain changed. Rust tests cover this round-trip.
