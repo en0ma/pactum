@@ -1,3 +1,9 @@
+## DFlow terminal evidence validation — partial implementation
+
+The V2 `reconcile_terminal_deltas` helper checks DFlow order closure, monotonic vault-custody outcome/refund token balances, bounded refunds, full-refund consistency, and the verified quote's prorated minimum outcome quantity. This builds on V1's terminal-order accounting and has adversarial unit tests.
+
+**Crucial missing attribution evidence:** a shared vault outcome token account or USDC refund destination can be affected by multiple orders between opening and terminal observation. Differences in those balances cannot safely prove *which* order supplied the fill/refund or provide a unique per-fill trade ID. Accordingly this helper does **not** create trade events, mutate `OrderRecordV2`, or authorize fee transfers. Before enabling live on-chain ingestion, isolate per-order custody or verify DFlow-owned order receipts with an authoritative event identifier and same-order refund/outcome amounts. Exactly-once event PDA creation and cumulative reconciliation must then occur in one transaction. Off-chain bot claims are not sufficient.
+
 ## V2 cumulative order reconciliation (not yet ingesting external events)
 
 An `OrderRecordV2` now stores a cumulative `OrderReconciliationV2`: verified filled USDC, credited outcome atoms, verified refunded USDC, accepted event count, and terminal state. The checked transition function requires positive and type-consistent fills/refunds; never allows total filled + refunded principal to exceed original order input; requires full principal reconciliation before terminal; rejects another transition after terminal; checks integer overflow. Its tests cover partial fills, refund remainder, overfill, early terminal, and rejected post-terminal mutations.
