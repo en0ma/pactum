@@ -6,6 +6,18 @@ export const DFLOW_PROGRAM = "pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb";
 const ACCOUNT_TYPES = ["order", "market", "settlement", "outcome", "refund"];
 function key(s) { return new PublicKey(s); }
 
+// Search the actual DFlow-owned market bytes for the registered order key.
+// A found key is a candidate reference, NOT proof of per-order amounts;
+// absence does not rule out hashed or indirect relationships.
+export function findOrderPubkeyOffsets(marketBytes,orderAddress) {
+  const data=Buffer.from(marketBytes);
+  const needle=new PublicKey(orderAddress).toBuffer();
+  const offsets=[];
+  for(let i=0;i<=data.length-needle.length;i++)
+    if(data.subarray(i,i+needle.length).equals(needle))offsets.push(i);
+  return offsets;
+}
+
 // Read actual *current* Solana account info. Never accept keeper-reported owner,
 // lamports, or data bytes; callers must supply account addresses only.
 export async function inspectDflowState(connection, targets) {
@@ -27,6 +39,7 @@ export async function inspectDflowState(connection, targets) {
   const order=result.accounts.order,market=result.accounts.market;
   result.orderIsClosed=!order.exists&&order.owner===undefined;
   result.marketIsDflowOwned=!!market.dflowOwned;
+  result.orderPubkeyOffsetsInMarket=market.dflowOwned?findOrderPubkeyOffsets(Buffer.from(market.dataBase64,'base64'),targets.order):null;
   result.hasPersistentOrderAmounts=false; // Not proven by account presence alone.
   return result;
 }
