@@ -10,11 +10,13 @@ pub struct TradeSnapshotV2 {
     pub trade_id: [u8;32],
     pub keeper_at_open: Pubkey,
     pub total_shares_at_open: u64,
+    /// Vault-wide share revision at the transaction's opening point.
+    pub share_revision_at_open: u64,
     pub trader_fee_bps_at_open: u16,
     pub bump: u8,
 }
 impl TradeSnapshotV2 {
-    pub const LEN:usize=32+32+32+8+2+1;
+    pub const LEN:usize=32+32+32+8+8+2+1;
 }
 
 #[account]
@@ -64,6 +66,7 @@ pub fn open(ctx:Context<OpenTradeSnapshotV2>,trade_id:[u8;32])->Result<()> {
     t.trade_id=trade_id;
     t.keeper_at_open=ctx.accounts.keeper.key();
     t.total_shares_at_open=v.total_shares;
+    t.share_revision_at_open=v.share_revision;
     t.trader_fee_bps_at_open=v.trader_profit_share_bps;
     t.bump=ctx.bumps.trade;
     Ok(())
@@ -74,7 +77,11 @@ pub fn checkpoint(ctx:Context<CheckpointParticipantV2>)->Result<()> {
     // A checkpoint after any share change would be stale. Consequently
     // this prototype only accepts an unchanged vault share supply and
     // must NOT be used for general mid-trade deposits or withdrawals.
+    require!(ctx.accounts.vault.share_revision==trade.share_revision_at_open,
+        PactumError::InvalidMarketExposure);
     require!(ctx.accounts.vault.total_shares==trade.total_shares_at_open,
+        PactumError::InvalidMarketExposure);
+    require!(p.share_revision<=trade.share_revision_at_open,
         PactumError::InvalidMarketExposure);
     require!(p.shares>0 && p.shares<=trade.total_shares_at_open,
         PactumError::InvalidMarketExposure);
