@@ -19,8 +19,8 @@ pub mod math;
 pub mod state;
 pub mod v2;
 pub mod trade_snapshots;
-pub use trade_snapshots::{OpenTradeSnapshotV2,VerifyTradeParticipationV2};
-use trade_snapshots::{__client_accounts_open_trade_snapshot_v2,__client_accounts_verify_trade_participation_v2};
+pub use trade_snapshots::{RegisterOrderV2,VerifyTradeParticipationV2};
+use trade_snapshots::{__client_accounts_register_order_v2,__client_accounts_verify_trade_participation_v2};
 pub use v2::{CreateVaultV2, ManageVaultV2, DepositVaultV2, WithdrawVaultV2, RequestPendingDepositV2, CancelPendingDepositV2, ActivatePendingDepositV2};
 use v2::{__client_accounts_create_vault_v2, __client_accounts_manage_vault_v2, __client_accounts_deposit_vault_v2, __client_accounts_withdraw_vault_v2, __client_accounts_request_pending_deposit_v2, __client_accounts_cancel_pending_deposit_v2, __client_accounts_activate_pending_deposit_v2};
 
@@ -44,11 +44,11 @@ pub mod pactum_vault {
         trade_snapshots::verify_participation(ctx)
     }
 
-    pub fn open_trade_snapshot_v2(
-        ctx: Context<OpenTradeSnapshotV2>, trade_id: [u8;32],
+    pub fn register_order_v2(
+        ctx: Context<RegisterOrderV2>, order_id: [u8;32],
         input_amount: u64, quoted_outcome_atoms: u64, slippage_bps: u16,
     ) -> Result<()> {
-        trade_snapshots::open(ctx,trade_id,input_amount,quoted_outcome_atoms,slippage_bps)
+        trade_snapshots::open(ctx,order_id,input_amount,quoted_outcome_atoms,slippage_bps)
     }
 
     pub fn create_vault_v2(ctx: Context<CreateVaultV2>, vault_id: [u8; 32],
