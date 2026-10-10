@@ -307,6 +307,15 @@ pub mod pactum_vault {
             usize::from(next_index),
             &ctx.accounts.instructions_sysvar.to_account_info()
         ).map_err(|_| error!(PactumError::InvalidDflowAccounts))?;
+        // The verifier may be preceded by ComputeBudget/nonce instructions,
+        // but must be the last instruction before the single DFlow open.
+        // Fail closed against appended transfers or other keeper-controlled actions.
+        let instruction_count = solana_instructions_sysvar::read_u16(
+            &ctx.accounts.instructions_sysvar.try_borrow_data()?,
+            0,
+        ).map_err(|_| error!(PactumError::InvalidDflowAccounts))?;
+        require!(usize::from(next_index) + 1 == usize::from(instruction_count),
+            PactumError::InvalidDflowAccounts);
         require_keys_eq!(next.program_id, dflow::DFLOW_PREDICTION_MARKETS, PactumError::InvalidDflowAccounts);
         require!(next.accounts.len() == 12, PactumError::InvalidDflowAccounts);
         let expected = [
