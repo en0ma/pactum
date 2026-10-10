@@ -41,6 +41,42 @@ pub fn classify_dflow_emit_event(data:&[u8])->Result<ObservedDflowEventKind> {
         _=>err!(PactumError::InvalidDflowFixture),
     }
 }
+/// Full semantic fields documented by DFlow for UserOrderEvent.
+/// This is an adapter for an IDL-decoded event, not a raw binary decoder:
+/// the public guide does not specify complete field order/encoding.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct DecodedUserOrderEvent {
+    pub kind:ObservedDflowEventKind,
+    pub user_order:Pubkey,
+    pub input_mint:Pubkey,
+    pub input_amount:u64,
+    pub output_mint:Pubkey,
+    pub output_amount:u64,
+    pub fee_mint:Pubkey,
+    pub fee_amount:u64,
+}
+/// Validate a decoded fill against an order's immutable identifying fields.
+/// This does not prove a historical transaction occurred.
+pub fn validate_decoded_order_fill(
+    event:&DecodedUserOrderEvent,
+    expected_order:Pubkey,
+    expected_input_mint:Pubkey,
+    expected_outcome_mint:Pubkey,
+)->Result<()> {
+    require!(event.kind==ObservedDflowEventKind::OrderFill,
+        PactumError::InvalidDflowFixture);
+    require_keys_eq!(event.user_order,expected_order,PactumError::InvalidDflowAccounts);
+    require_keys_eq!(event.input_mint,expected_input_mint,PactumError::InvalidDflowAccounts);
+    require_keys_eq!(event.output_mint,expected_outcome_mint,PactumError::InvalidDflowAccounts);
+    require_keys_eq!(event.fee_mint,expected_input_mint,PactumError::InvalidDflowAccounts);
+    require!(event.input_amount>0 && event.output_amount>0,PactumError::InvalidDflowFixture);
+    Ok(())
+}
+/// Stable event keys must identify the concrete event position, not just
+/// a transaction: one finalized Solana transaction may emit several fills.
+pub fn event_identity_components(signature:[u8;64],event_position:u32)->([u8;64],u32) {
+    (signature,event_position)
+}
 pub const EVENT_FILL:u8=1;
 pub const EVENT_REFUND:u8=2;
 
@@ -227,6 +263,22 @@ mod tests {
   bytes[0]=0;
   assert!(classify_dflow_emit_event(&bytes).is_err());
   assert!(classify_dflow_emit_event(&[0xf0,0,0,0,0,0,0,0,2]).is_err());
+ }
+ #[test] fn decoded_fill_requires_matching_order_and_mints() {
+  let order=Pubkey::new_unique();let usdc=Pubkey::new_unique();let outcome=Pubkey::new_unique();
+  let mut e=DecodedUserOrderEvent{kind:ObservedDflowEventKind::OrderFill,
+   user_order:order,input_mint:usdc,input_amount:42,output_mint:outcome,
+   output_amount:84,fee_mint:usdc,fee_amount:1};
+  assert!(validate_decoded_order_fill(&e,order,usdc,outcome).is_ok());
+  assert!(validate_decoded_order_fill(&e,Pubkey::new_unique(),usdc,outcome).is_err());
+  e.fee_mint=outcome;
+  assert!(validate_decoded_order_fill(&e,order,usdc,outcome).is_err());
+  e.fee_mint=usdc;e.kind=ObservedDflowEventKind::UserRedeem;
+  assert!(validate_decoded_order_fill(&e,order,usdc,outcome).is_err());
+ }
+ #[test] fn two_events_in_same_transaction_have_distinct_identities() {
+  let signature=[9u8;64];
+  assert_ne!(event_identity_components(signature,0),event_identity_components(signature,1));
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
