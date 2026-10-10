@@ -127,6 +127,8 @@ jobs:
         run: cargo test -p pactum-vault --lib vault_keeper_authorization_tests
       - name: Test independent v2 vault authorization and risk rules
         run: cargo test -p pactum-vault --lib v2::tests
+      - name: Test historical trade-opening share proof
+        run: cargo test -p pactum-vault --lib trade_snapshots::tests
       - name: Test profit fees and late-deposit NAV math
         run: cargo test -p pactum-vault --lib accounting::tests
 
