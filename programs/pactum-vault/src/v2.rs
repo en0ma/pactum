@@ -10,6 +10,8 @@ pub struct VaultV2 {
     pub admin: Pubkey,
     pub keeper: Pubkey, // Pubkey::default() means no bot assigned
     pub usdc_vault: Pubkey,
+    pub pending_usdc_vault: Pubkey,
+    pub pending_usdc_total: u64,
     pub paused: bool,
     pub authority_bump: u8,
     pub config_bump: u8,
@@ -23,7 +25,7 @@ pub struct VaultV2 {
     pub trader_profit_share_bps: u16,
 }
 impl VaultV2 {
-    pub const LEN: usize = 32 + 32 + 32 + 32 + 1 + 1 + 1 + 8 * 6 + 2;
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 8 * 7 + 2;
     pub fn require_keeper(&self, keeper: Pubkey) -> Result<()> {
         require!(self.keeper != Pubkey::default(), PactumError::UnauthorizedKeeper);
         require_keys_eq!(self.keeper, keeper, PactumError::UnauthorizedKeeper);
@@ -43,9 +45,10 @@ impl VaultV2 {
 pub struct VaultV2Position {
     pub owner: Pubkey,
     pub shares: u64,
+    pub pending_usdc: u64,
     pub bump: u8,
 }
-impl VaultV2Position { pub const LEN: usize = 32 + 8 + 1; }
+impl VaultV2Position { pub const LEN: usize = 32 + 8 + 8 + 1; }
 
 #[derive(Accounts)]
 #[instruction(vault_id: [u8; 32])]
@@ -66,6 +69,9 @@ pub struct CreateVaultV2<'info> {
     #[account(init, payer=admin, seeds=[b"vault_usdc", vault.key().as_ref()],
         bump, token::mint=usdc_mint, token::authority=authority)]
     pub vault_usdc: Account<'info, TokenAccount>,
+    #[account(init, payer=admin, seeds=[b"pending_usdc", vault.key().as_ref()],
+        bump, token::mint=usdc_mint, token::authority=authority)]
+    pub pending_usdc_vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -113,6 +119,135 @@ pub struct WithdrawVaultV2<'info> {
     pub vault_usdc: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
+// Queued deposits are held outside active trading USDC. This enables
+// requests and cancellations while previous trades are still open.
+#[derive(Accounts)]
+pub struct RequestPendingDepositV2<'info> {
+    #[account(mut)] pub user: Signer<'info>,
+    #[account(mut, seeds=[b"vault", vault.vault_id.as_ref()], bump=vault.config_bump)]
+    pub vault: Account<'info, VaultV2>,
+    /// CHECK: vault-specific custody authority.
+    #[account(seeds=[b"vault_authority", vault.key().as_ref()], bump=vault.authority_bump)]
+    pub authority: UncheckedAccount<'info>,
+    #[account(init_if_needed, payer=user, space=8+VaultV2Position::LEN,
+        seeds=[b"v2_position", vault.key().as_ref(), user.key().as_ref()], bump)]
+    pub position: Account<'info, VaultV2Position>,
+    #[account(address=dflow::USDC_MINT)] pub usdc_mint: Account<'info, Mint>,
+    #[account(mut, token::mint=usdc_mint, token::authority=user)]
+    pub user_usdc: Account<'info, TokenAccount>,
+    #[account(mut, address=vault.pending_usdc_vault,
+        seeds=[b"pending_usdc", vault.key().as_ref()], bump,
+        token::mint=usdc_mint, token::authority=authority)]
+    pub pending_usdc_vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+#[derive(Accounts)]
+pub struct CancelPendingDepositV2<'info> {
+    #[account(mut)] pub user: Signer<'info>,
+    #[account(mut, seeds=[b"vault", vault.vault_id.as_ref()], bump=vault.config_bump)]
+    pub vault: Account<'info, VaultV2>,
+    /// CHECK: vault-specific custody authority.
+    #[account(seeds=[b"vault_authority", vault.key().as_ref()], bump=vault.authority_bump)]
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds=[b"v2_position", vault.key().as_ref(), user.key().as_ref()],
+        bump=position.bump, constraint=position.owner==user.key())]
+    pub position: Account<'info, VaultV2Position>,
+    #[account(address=dflow::USDC_MINT)] pub usdc_mint: Account<'info, Mint>,
+    #[account(mut, token::mint=usdc_mint, token::authority=user)]
+    pub user_usdc: Account<'info, TokenAccount>,
+    #[account(mut, address=vault.pending_usdc_vault,
+        seeds=[b"pending_usdc", vault.key().as_ref()], bump,
+        token::mint=usdc_mint, token::authority=authority)]
+    pub pending_usdc_vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+#[derive(Accounts)]
+pub struct ActivatePendingDepositV2<'info> {
+    /// Permissionless activation at a verified no-exposure cutoff.
+    pub caller: Signer<'info>,
+    /// CHECK: depositor identity is bound to the position PDA.
+    pub depositor: UncheckedAccount<'info>,
+    #[account(mut, seeds=[b"vault", vault.vault_id.as_ref()], bump=vault.config_bump)]
+    pub vault: Account<'info, VaultV2>,
+    /// CHECK: vault-specific custody authority.
+    #[account(seeds=[b"vault_authority", vault.key().as_ref()], bump=vault.authority_bump)]
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds=[b"v2_position", vault.key().as_ref(), depositor.key().as_ref()],
+        bump=position.bump, constraint=position.owner==depositor.key())]
+    pub position: Account<'info, VaultV2Position>,
+    #[account(address=dflow::USDC_MINT)] pub usdc_mint: Account<'info, Mint>,
+    #[account(mut, address=vault.usdc_vault,
+        seeds=[b"vault_usdc", vault.key().as_ref()], bump,
+        token::mint=usdc_mint, token::authority=authority)]
+    pub vault_usdc: Account<'info, TokenAccount>,
+    #[account(mut, address=vault.pending_usdc_vault,
+        seeds=[b"pending_usdc", vault.key().as_ref()], bump,
+        token::mint=usdc_mint, token::authority=authority)]
+    pub pending_usdc_vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+pub fn request_pending_deposit(ctx: Context<RequestPendingDepositV2>, amount: u64) -> Result<()> {
+    require!(amount>0, PactumError::ZeroAmount);
+    let v=&mut ctx.accounts.vault;
+    let p=&mut ctx.accounts.position;
+    if p.owner==Pubkey::default() {
+        p.owner=ctx.accounts.user.key();
+        p.bump=ctx.bumps.position;
+        p.shares=0;
+        p.pending_usdc=0;
+    }
+    require_keys_eq!(p.owner,ctx.accounts.user.key(),PactumError::UnauthorizedAdmin);
+    p.pending_usdc=p.pending_usdc.checked_add(amount).ok_or(PactumError::MathOverflow)?;
+    v.pending_usdc_total=v.pending_usdc_total.checked_add(amount).ok_or(PactumError::MathOverflow)?;
+    token::transfer_checked(CpiContext::new(ctx.accounts.token_program.key(),
+        TransferChecked{from:ctx.accounts.user_usdc.to_account_info(),
+            mint:ctx.accounts.usdc_mint.to_account_info(),
+            to:ctx.accounts.pending_usdc_vault.to_account_info(),
+            authority:ctx.accounts.user.to_account_info()}),
+        amount,ctx.accounts.usdc_mint.decimals)
+}
+pub fn cancel_pending_deposit(ctx: Context<CancelPendingDepositV2>, amount: u64) -> Result<()> {
+    require!(amount>0 && ctx.accounts.position.pending_usdc>=amount,
+        PactumError::InsufficientPendingDeposit);
+    ctx.accounts.position.pending_usdc=ctx.accounts.position.pending_usdc
+        .checked_sub(amount).ok_or(PactumError::MathOverflow)?;
+    ctx.accounts.vault.pending_usdc_total=ctx.accounts.vault.pending_usdc_total
+        .checked_sub(amount).ok_or(PactumError::MathOverflow)?;
+    let vault_key=ctx.accounts.vault.key();
+    let bump=ctx.accounts.vault.authority_bump;
+    let seeds:&[&[u8]]=&[b"vault_authority",vault_key.as_ref(),&[bump]];
+    token::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(),
+        TransferChecked{from:ctx.accounts.pending_usdc_vault.to_account_info(),
+            mint:ctx.accounts.usdc_mint.to_account_info(),
+            to:ctx.accounts.user_usdc.to_account_info(),
+            authority:ctx.accounts.authority.to_account_info()},&[seeds]),
+        amount,ctx.accounts.usdc_mint.decimals)
+}
+pub fn activate_pending_deposit(ctx: Context<ActivatePendingDepositV2>) -> Result<()> {
+    let v=&mut ctx.accounts.vault;
+    // Do not admit new capital to an older open position's PnL.
+    require!(v.open_exposure_usdc==0 && v.open_positions==0, PactumError::ExposureOpen);
+    let amount=ctx.accounts.position.pending_usdc;
+    require!(amount>0,PactumError::InsufficientPendingDeposit);
+    // Only active NAV is used; queued USDC remains in a separate custody account.
+    // This requires fee and realized-PnL crystallization to be completed upstream.
+    let minted=crate::accounting::shares_at_crystallized_nav(
+        amount,v.total_shares,ctx.accounts.vault_usdc.amount)?;
+    ctx.accounts.position.pending_usdc=0;
+    v.pending_usdc_total=v.pending_usdc_total.checked_sub(amount).ok_or(PactumError::MathOverflow)?;
+    ctx.accounts.position.shares=ctx.accounts.position.shares
+        .checked_add(minted).ok_or(PactumError::MathOverflow)?;
+    v.total_shares=v.total_shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
+    let vault_key=v.key();
+    let seeds:&[&[u8]]=&[b"vault_authority",vault_key.as_ref(),&[v.authority_bump]];
+    token::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(),
+        TransferChecked{from:ctx.accounts.pending_usdc_vault.to_account_info(),
+            mint:ctx.accounts.usdc_mint.to_account_info(),
+            to:ctx.accounts.vault_usdc.to_account_info(),
+            authority:ctx.accounts.authority.to_account_info()},&[seeds]),
+        amount,ctx.accounts.usdc_mint.decimals)
+}
 pub fn create(ctx: Context<CreateVaultV2>, vault_id: [u8;32],
     max_trade: u64, max_exposure: u64, buffer: u64) -> Result<()> {
     math::validate_risk_limits(max_trade, max_exposure)?;
@@ -121,6 +256,8 @@ pub fn create(ctx: Context<CreateVaultV2>, vault_id: [u8;32],
     v.admin=ctx.accounts.admin.key();
     v.keeper=Pubkey::default();
     v.usdc_vault=ctx.accounts.vault_usdc.key();
+    v.pending_usdc_vault=ctx.accounts.pending_usdc_vault.key();
+    v.pending_usdc_total=0;
     v.paused=false;
     v.authority_bump=ctx.bumps.authority;
     v.config_bump=ctx.bumps.vault;
@@ -160,7 +297,7 @@ pub fn deposit(ctx: Context<DepositVaultV2>, amount: u64) -> Result<()> {
     require!(v.open_exposure_usdc==0 && v.open_positions==0, PactumError::ExposureOpen);
     let minted=math::shares_for_deposit(amount,v.total_shares,ctx.accounts.vault_usdc.amount)?;
     let p=&mut ctx.accounts.position;
-    if p.owner==Pubkey::default() { p.owner=ctx.accounts.user.key(); p.bump=ctx.bumps.position; }
+    if p.owner==Pubkey::default() { p.owner=ctx.accounts.user.key(); p.bump=ctx.bumps.position; p.pending_usdc=0; }
     require_keys_eq!(p.owner,ctx.accounts.user.key(),PactumError::UnauthorizedAdmin);
     p.shares=p.shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
     v.total_shares=v.total_shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
@@ -194,7 +331,7 @@ mod tests {
  use super::*;
  fn v(id:u8,keeper:Pubkey, max:u64)->VaultV2 {
   VaultV2{vault_id:[id;32],admin:Pubkey::new_unique(),keeper,
-   usdc_vault:Pubkey::new_unique(),paused:false,authority_bump:255,config_bump:254,
+   usdc_vault:Pubkey::new_unique(),pending_usdc_vault:Pubkey::new_unique(),pending_usdc_total:0,paused:false,authority_bump:255,config_bump:254,
    max_trade_usdc:max,max_total_exposure_usdc:max*2,min_liquidity_buffer_usdc:10,
    open_exposure_usdc:0,total_shares:0,open_positions:0,trader_profit_share_bps:0}
  }
