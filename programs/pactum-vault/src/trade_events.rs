@@ -7,6 +7,40 @@
 use anchor_lang::prelude::*;
 use crate::error::PactumError;
 
+/// Confirmed DFlow PredictionMarkets EmitEvent header (official IDL).
+/// This classifier deliberately does not treat the event body as proof of
+/// amounts or of the original userOrder: those require full IDL decoding.
+pub const DFLOW_EMIT_EVENT_DISCRIMINATOR: [u8;8] = [0xf0,0,0,0,0,0,0,0];
+pub const DFLOW_USER_ORDER_EVENT:u8=2;
+pub const DFLOW_USER_REDEEM_EVENT:u8=3;
+pub const USER_ORDER_OPEN:u8=1;
+pub const USER_ORDER_FILL:u8=2;
+pub const USER_ORDER_CANCEL:u8=3;
+pub const USER_ORDER_REVERT:u8=4;
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum ObservedDflowEventKind {
+    OrderOpen, OrderFill, OrderCancel, OrderRevert, UserRedeem,
+}
+/// Verify the framing only. This API must never be used as the sole
+/// authorization for a TradeEventV2 or settlement transfer.
+pub fn classify_dflow_emit_event(data:&[u8])->Result<ObservedDflowEventKind> {
+    require!(data.len()>=9,PactumError::InvalidDflowFixture);
+    require!(data[..8]==DFLOW_EMIT_EVENT_DISCRIMINATOR,PactumError::InvalidDflowFixture);
+    match data[8] {
+        DFLOW_USER_ORDER_EVENT => {
+            require!(data.len()>=10,PactumError::InvalidDflowFixture);
+            match data[9] {
+                USER_ORDER_OPEN=>Ok(ObservedDflowEventKind::OrderOpen),
+                USER_ORDER_FILL=>Ok(ObservedDflowEventKind::OrderFill),
+                USER_ORDER_CANCEL=>Ok(ObservedDflowEventKind::OrderCancel),
+                USER_ORDER_REVERT=>Ok(ObservedDflowEventKind::OrderRevert),
+                _=>err!(PactumError::InvalidDflowFixture),
+            }
+        },
+        DFLOW_USER_REDEEM_EVENT=>Ok(ObservedDflowEventKind::UserRedeem),
+        _=>err!(PactumError::InvalidDflowFixture),
+    }
+}
 pub const EVENT_FILL:u8=1;
 pub const EVENT_REFUND:u8=2;
 
@@ -182,6 +216,17 @@ mod tests {
   d.outcome_end=0;
   let r=reconcile_terminal_deltas(100,100,100,d).unwrap();
   assert_eq!(r.consumed_usdc,0);
+ }
+ #[test] fn dflow_event_header_classifies_order_and_redeem_without_trusting_payload() {
+  let mut bytes=vec![0xf0,0,0,0,0,0,0,0,2,2];
+  assert_eq!(classify_dflow_emit_event(&bytes).unwrap(),ObservedDflowEventKind::OrderFill);
+  bytes[9]=3;
+  assert_eq!(classify_dflow_emit_event(&bytes).unwrap(),ObservedDflowEventKind::OrderCancel);
+  bytes[8]=3;
+  assert_eq!(classify_dflow_emit_event(&bytes).unwrap(),ObservedDflowEventKind::UserRedeem);
+  bytes[0]=0;
+  assert!(classify_dflow_emit_event(&bytes).is_err());
+  assert!(classify_dflow_emit_event(&[0xf0,0,0,0,0,0,0,0,2]).is_err());
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
