@@ -299,11 +299,11 @@ pub mod pactum_vault {
                 >= ctx.accounts.config.min_liquidity_buffer_usdc,
             PactumError::LiquidityBufferViolation
         );
-        let current_ix = anchor_lang::solana_program::sysvar::instructions::load_current_index_checked(
+        let current_ix = solana_instructions_sysvar::load_current_index_checked(
             &ctx.accounts.instructions_sysvar.to_account_info()
         )?;
         let next_index = current_ix.checked_add(1).ok_or(PactumError::MathOverflow)?;
-        let next = anchor_lang::solana_program::sysvar::instructions::load_instruction_at_checked(
+        let next = solana_instructions_sysvar::load_instruction_at_checked(
             usize::from(next_index),
             &ctx.accounts.instructions_sysvar.to_account_info()
         ).map_err(|_| error!(PactumError::InvalidDflowAccounts))?;
@@ -1654,7 +1654,7 @@ pub struct VerifyDflowWrapper<'info> {
     #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
     pub event_authority: UncheckedAccount<'info>,
     /// CHECK: Solana instructions sysvar; sysvar address checked explicitly.
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    #[account(address = solana_instructions_sysvar::ID)]
     pub instructions_sysvar: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
