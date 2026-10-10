@@ -275,6 +275,36 @@ pub fn verify_canonical_dflow_order_closed(
     Ok(())
 }
 
+/// Pure fail-closed authorization boundary for a proposed reconciliation.
+/// `authenticated` must ONLY be provided by an on-chain verifier of
+/// DFlow-owned state/atomic DFlow execution, never from keeper instruction
+/// data or an off-chain RPC assertion. Until that verifier exists, callers
+/// must pass false and no persistent V2 ingestion instruction is exposed.
+pub fn verify_reconciliation_transition(
+    authenticated:bool,
+    registered_vault:Pubkey,
+    submitted_vault:Pubkey,
+    registered_order:Pubkey,
+    submitted_order:Pubkey,
+    expected_before:OrderReconciliationV2,
+    actual_before:OrderReconciliationV2,
+    proposed_after:OrderReconciliationV2,
+    original_input_usdc:u64,
+    kind:u8,
+    input_usdc:u64,
+    outcome_atoms:u64,
+    refund_usdc:u64,
+)->Result<()> {
+    require!(authenticated,PactumError::InvalidDflowFixture);
+    require_keys_eq!(registered_vault,submitted_vault,PactumError::InvalidMarketExposure);
+    require_keys_eq!(registered_order,submitted_order,PactumError::InvalidDflowAccounts);
+    require!(actual_before==expected_before,PactumError::InvalidMarketExposure);
+    let mut computed=actual_before;
+    computed.apply(original_input_usdc,kind,input_usdc,outcome_atoms,refund_usdc,false)?;
+    require!(computed==proposed_after,PactumError::InvalidDflowFixture);
+    Ok(())
+}
+
 /// Terminal evidence as differences from order-opening custody snapshots.
 /// Exclusive attribution to this order must be established elsewhere.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -482,6 +512,21 @@ mod tests {
   assert!(verify_canonical_dflow_order_closed(order,order,Pubkey::new_unique(),0,0).is_err());
   assert!(verify_canonical_dflow_order_closed(order,order,system,1,0).is_err());
   assert!(verify_canonical_dflow_order_closed(order,order,system,0,1).is_err());
+ }
+ #[test] fn reconciliation_rejects_keeper_assertions_stale_and_forged_totals() {
+  let vault=Pubkey::new_unique();let order=Pubkey::new_unique();
+  let before=OrderReconciliationV2::default();
+  let mut after=before;
+  after.apply(100,EVENT_FILL,60,90,0,false).unwrap();
+  let verify=|auth,v,o,old,new|verify_reconciliation_transition(
+    auth,vault,v,order,o,before,old,new,100,EVENT_FILL,60,90,0);
+  assert!(verify(false,vault,order,before,after).is_err());
+  assert!(verify(true,Pubkey::new_unique(),order,before,after).is_err());
+  assert!(verify(true,vault,Pubkey::new_unique(),before,after).is_err());
+  assert!(verify(true,vault,order,after,after).is_err());
+  let mut forged=after;forged.outcome_atoms=1000;
+  assert!(verify(true,vault,order,before,forged).is_err());
+  assert!(verify(true,vault,order,before,after).is_ok());
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
