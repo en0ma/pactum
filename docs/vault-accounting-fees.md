@@ -1,3 +1,9 @@
+## DFlow UserOrderEvent semantic validation — IDL adapter
+
+The official DFlow parsing guide confirms semantic fields `userOrder`, `inputMint`, `inputAmount`, `outputMint`, `outputAmount`, `feeMint`, and `feeAmount` for order events. `DecodedUserOrderEvent` and `validate_decoded_order_fill` now reject fills with mismatched parent order or input/output/fee mint, invalid lifecycle kind, or zero fill quantities. Tests also establish why event identity must include the event's intra-transaction position: one transaction can contain more than one emitted event.
+
+**Not yet a complete raw event decoder:** the public DFlow guide does not provide the exact serialized order and layout of *all* event fields, so we must obtain the versioned program IDL or confirmed fixture before decoding arbitrary raw `EmitEvent` bytes into `DecodedUserOrderEvent`. Do not guess offsets or treat this adapter as an on-chain historical proof. The keeper can perform accurate off-chain IDL decoding and monitoring, but ledger writes, settlement and fees remain disabled pending an authenticated proof path. The original purchase order in `UserRedeemEvent` is still unverified.
+
 ## DFlow program events: protocol-keeper observation versus on-chain authorization
 
 The protocol keeper (separate from the trading bot) monitors actual DFlow PredictionMarkets `EmitEvent` instructions. DFlow's published schema uses the 8-byte `f0 00 00 00 00 00 00 00` discriminator, event type `2` for `UserOrderEvent` and `3` for `UserRedeemEvent`; order event subtypes are Open=1, Fill=2, Cancel=3, Revert=4. Order lifecycle events include `userOrder`, linking opening and subsequent fills/cancellations to a parent order. The new `classify_dflow_emit_event` helper parses **only this documented header**; the remaining event fields require full authoritative IDL decoding. **The helper does not authenticate a historical transaction or enable payouts.**
