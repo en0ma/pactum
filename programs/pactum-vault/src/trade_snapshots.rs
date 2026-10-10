@@ -2,7 +2,8 @@
 //! This records immutable per-vault opening shares, not a DFlow fill.
 //! Snapshot creation is keeper-gated and has no custody or fee side effects.
 use anchor_lang::prelude::*;
-use crate::{error::PactumError, v2::{VaultV2,VaultV2Position,ShareCheckpointV2}};
+use crate::{dflow, error::PactumError, state::{ApprovedMarket,MarketRegistry}, v2::{VaultV2,VaultV2Position,ShareCheckpointV2}};
+use anchor_spl::token::{Mint,TokenAccount};
 
 #[account]
 pub struct TradeSnapshotV2 {
@@ -13,10 +14,13 @@ pub struct TradeSnapshotV2 {
     /// Vault-wide share revision at the transaction's opening point.
     pub share_revision_at_open: u64,
     pub trader_fee_bps_at_open: u16,
+    pub order_account: Pubkey,
+    pub market_ledger: Pubkey,
+    pub input_amount_usdc: u64,
     pub bump: u8,
 }
 impl TradeSnapshotV2 {
-    pub const LEN:usize=32+32+32+8+8+2+1;
+    pub const LEN:usize=32+32+32+8+8+2+32+32+8+1;
 }
 
 #[account]
@@ -37,6 +41,28 @@ pub struct OpenTradeSnapshotV2<'info> {
     #[account(init,payer=keeper,space=8+TradeSnapshotV2::LEN,
         seeds=[b"trade_snapshot",vault.key().as_ref(),trade_id.as_ref()],bump)]
     pub trade: Account<'info,TradeSnapshotV2>,
+    #[account(seeds=[b"market_registry"],bump=market_registry.bump)]
+    pub market_registry: Account<'info,MarketRegistry>,
+    #[account(seeds=[b"market",approved_market.market_ledger.as_ref()],bump=approved_market.bump)]
+    pub approved_market: Account<'info,ApprovedMarket>,
+    /// CHECK: Must be both the approved and registry current DFlow market.
+    #[account(address=approved_market.market_ledger,
+        constraint=*market_ledger.owner==dflow::DFLOW_PREDICTION_MARKETS)]
+    pub market_ledger: UncheckedAccount<'info>,
+    #[account(address=approved_market.settlement_vault)]
+    pub settlement_vault: Account<'info,TokenAccount>,
+    /// CHECK: Actual DFlow order account, bound to trade ID and following instruction.
+    pub order_account: UncheckedAccount<'info>,
+    #[account(seeds=[b"vault_authority",vault.key().as_ref()],bump=vault.authority_bump)]
+    /// CHECK: PDA custody identity only.
+    pub vault_authority: UncheckedAccount<'info>,
+    #[account(address=dflow::USDC_MINT)]
+    pub usdc_mint: Account<'info,Mint>,
+    #[account(token::mint=usdc_mint, token::authority=keeper)]
+    pub keeper_usdc: Account<'info,TokenAccount>,
+    /// CHECK: Instructions sysvar for atomic next-instruction verification.
+    #[account(address=solana_instructions_sysvar::ID)]
+    pub instructions_sysvar: UncheckedAccount<'info>,
     pub system_program: Program<'info,System>,
 }
 #[derive(Accounts)]
@@ -57,10 +83,74 @@ pub struct CheckpointParticipantV2<'info> {
     pub participant: Account<'info,TradeParticipantV2>,
     pub system_program: Program<'info,System>,
 }
-pub fn open(ctx:Context<OpenTradeSnapshotV2>,trade_id:[u8;32])->Result<()> {
+pub fn open(ctx:Context<OpenTradeSnapshotV2>,trade_id:[u8;32],
+    input_amount:u64, quoted_outcome_atoms:u64, slippage_bps:u16)->Result<()> {
     let v=&ctx.accounts.vault;
     v.require_keeper(ctx.accounts.keeper.key())?;
     require!(v.total_shares>0,PactumError::ZeroShares);
+    require!(trade_id==ctx.accounts.order_account.key().to_bytes(),
+        PactumError::InvalidDflowAccounts);
+    v.check_trade(input_amount,ctx.accounts.vault_usdc.amount)?;
+    let registry=&ctx.accounts.market_registry;
+    let now=Clock::get()?.unix_timestamp;
+    require!(registry.sequence>0 && registry.current.start_ts<=now &&
+        now<registry.current.end_ts,PactumError::MarketRegistryStale);
+    let approved=&ctx.accounts.approved_market;
+    require!(approved.enabled,PactumError::MarketDisabled);
+    require_keys_eq!(registry.current.market_ledger,ctx.accounts.market_ledger.key(),
+        PactumError::MarketRegistryMismatch);
+    require_keys_eq!(registry.current.settlement_vault,ctx.accounts.settlement_vault.key(),
+        PactumError::MarketRegistryMismatch);
+    require_keys_eq!(registry.current.yes_mint,approved.yes_mint,
+        PactumError::MarketRegistryMismatch);
+    require_keys_eq!(registry.current.no_mint,approved.no_mint,
+        PactumError::MarketRegistryMismatch);
+    require_keys_eq!(ctx.accounts.settlement_vault.mint,ctx.accounts.usdc_mint.key(),
+        PactumError::InvalidDflowAccounts);
+    require_keys_eq!(ctx.accounts.settlement_vault.owner,ctx.accounts.market_ledger.key(),
+        PactumError::InvalidDflowAccounts);
+    let index=solana_instructions_sysvar::load_current_index_checked(
+        &ctx.accounts.instructions_sysvar.to_account_info())?;
+    let next_index=index.checked_add(1).ok_or(PactumError::MathOverflow)?;
+    let data=ctx.accounts.instructions_sysvar.try_borrow_data()?;
+    let count=u16::from_le_bytes(data.get(..2).ok_or(PactumError::InvalidDflowAccounts)?
+        .try_into().map_err(|_|error!(PactumError::InvalidDflowAccounts))?);
+    require!(next_index.checked_add(1)==Some(count),PactumError::InvalidDflowAccounts);
+    drop(data);
+    let next=solana_instructions_sysvar::load_instruction_at_checked(
+        usize::from(next_index),&ctx.accounts.instructions_sysvar.to_account_info())?;
+    require_keys_eq!(next.program_id,dflow::DFLOW_PREDICTION_MARKETS,
+        PactumError::InvalidDflowAccounts);
+    require!(next.accounts.len()==12,PactumError::InvalidDflowAccounts);
+    let expected=[
+        dflow::DFLOW_PREDICTION_MARKETS,
+        dflow::prediction_v1::EVENT_AUTHORITY,
+        ctx.accounts.market_ledger.key(),
+        ctx.accounts.settlement_vault.key(),
+        ctx.accounts.order_account.key(),
+        ctx.accounts.usdc_mint.key(),
+        ctx.accounts.keeper_usdc.key(),
+        ctx.accounts.keeper.key(),
+        ctx.accounts.vault_authority.key(),
+        ctx.accounts.vault_authority.key(),
+        dflow::prediction_v1::SPL_TOKEN_PROGRAM,
+        dflow::prediction_v1::SYSTEM_PROGRAM,
+    ];
+    for (meta,want) in next.accounts.iter().zip(expected.iter()) {
+        require_keys_eq!(meta.pubkey,*want,PactumError::InvalidDflowAccounts);
+    }
+    require!(next.accounts[7].is_signer && !next.accounts[6].is_signer
+        && !next.accounts[8].is_signer && !next.accounts[9].is_signer,
+        PactumError::InvalidDflowAccounts);
+    let observed=dflow::prediction_v1::decode_observed_open_order(&next.data)?;
+    let side=match observed.side {
+        dflow::prediction_v1::OutcomeSide::Yes => approved.yes_mint,
+        dflow::prediction_v1::OutcomeSide::No => approved.no_mint,
+    };
+    require!(side==registry.current.yes_mint || side==registry.current.no_mint,
+        PactumError::MarketRegistryMismatch);
+    dflow::prediction_v1::validate_open_order_data(&next.data,observed.side,
+        input_amount,quoted_outcome_atoms,slippage_bps)?;
     let t=&mut ctx.accounts.trade;
     t.vault=v.key();
     t.trade_id=trade_id;
@@ -68,6 +158,9 @@ pub fn open(ctx:Context<OpenTradeSnapshotV2>,trade_id:[u8;32])->Result<()> {
     t.total_shares_at_open=v.total_shares;
     t.share_revision_at_open=v.share_revision;
     t.trader_fee_bps_at_open=v.trader_profit_share_bps;
+    t.order_account=ctx.accounts.order_account.key();
+    t.market_ledger=ctx.accounts.market_ledger.key();
+    t.input_amount_usdc=input_amount;
     t.bump=ctx.bumps.trade;
     Ok(())
 }
