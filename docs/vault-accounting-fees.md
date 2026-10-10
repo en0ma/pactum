@@ -1,3 +1,7 @@
+## Experimental V2 trade-snapshot accounts — not yet an entitlement ledger
+
+`trade_snapshots.rs` now defines a per-vault, immutable trade-opening record containing trade ID, keeper, active share supply and bot fee rate. A participant checkpoint PDA can record a wallet's shares for that trade. Tests cover vault-isolated addresses. **These are scaffolding, not a secure snapshot implementation:** participant checkpoints occur in separate transactions, so a changing depositor position may not match its historical trade-open share count (even if total supply later returns to the same value). PnL routing **must not use these records** until snapshot creation is atomic, complete or provably authentic against historical ownership; the verifier must bind the trade ID to a real on-chain DFlow open and enforce single-use settlement. Likewise deposits cannot yet bypass the exposure-open guard. No production trading, fee routing or unrestricted active deposits are enabled.
+
 # Vault V2 accounting: trade-open participation and settlement waterfall
 
 ## Superseding decision: immediate active deposits, trade-open snapshots
