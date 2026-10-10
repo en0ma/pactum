@@ -29,6 +29,37 @@ impl OrderRecordV2 {
     pub const LEN:usize=32+32+1+1+8+2+32+8+8+2+32+32+8+8+8+8+8+1+1;
 }
 
+/// Permissionless terminalization: no keeper-reported amount is accepted.
+/// Only an already-reconciled order with a canonically closed DFlow order
+/// account can become terminal. No token transfers or fee side effects.
+#[derive(Accounts)]
+pub struct FinalizeReconciledOrderV2<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds=[b"vault",vault.vault_id.as_ref()],bump=vault.config_bump)]
+    pub vault: Account<'info,VaultV2>,
+    #[account(mut,
+        seeds=[b"v2_order",vault.key().as_ref(),order.order_id.as_ref()],
+        bump=order.bump,
+        constraint=order.vault==vault.key() @ PactumError::InvalidMarketExposure)]
+    pub order: Account<'info,OrderRecordV2>,
+    /// CHECK: Must exactly match registered canonical DFlow order address;
+    /// terminal state is validated from actual account owner/lamports/data.
+    pub dflow_order_account: UncheckedAccount<'info>,
+}
+
+pub fn finalize_reconciled_order(ctx:Context<FinalizeReconciledOrderV2>)->Result<()> {
+    let order=&mut ctx.accounts.order;
+    let dflow_account=&ctx.accounts.dflow_order_account;
+    crate::trade_events::verify_canonical_dflow_order_closed(
+        order.order_account,dflow_account.key(),*dflow_account.owner,
+        dflow_account.lamports(),dflow_account.data_len())?;
+    order.reconciliation=crate::trade_events::project_terminal_order(
+        order.reconciliation,order.input_amount_usdc,
+        order.quoted_outcome_atoms,order.slippage_bps,true)?;
+    Ok(())
+}
+
 #[account]
 pub struct TradeParticipantV2 {
     pub trade: Pubkey,
