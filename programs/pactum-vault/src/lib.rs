@@ -18,8 +18,8 @@ pub mod error;
 pub mod math;
 pub mod state;
 pub mod v2;
-pub use v2::{CreateVaultV2, ManageVaultV2, DepositVaultV2, WithdrawVaultV2};
-use v2::{__client_accounts_create_vault_v2, __client_accounts_manage_vault_v2, __client_accounts_deposit_vault_v2, __client_accounts_withdraw_vault_v2};
+pub use v2::{CreateVaultV2, ManageVaultV2, DepositVaultV2, WithdrawVaultV2, RequestPendingDepositV2, CancelPendingDepositV2, ActivatePendingDepositV2};
+use v2::{__client_accounts_create_vault_v2, __client_accounts_manage_vault_v2, __client_accounts_deposit_vault_v2, __client_accounts_withdraw_vault_v2, __client_accounts_request_pending_deposit_v2, __client_accounts_cancel_pending_deposit_v2, __client_accounts_activate_pending_deposit_v2};
 
 use error::PactumError;
 use state::{
@@ -55,6 +55,24 @@ pub mod pactum_vault {
         ctx: Context<ManageVaultV2>, trader_profit_share_bps: u16,
     ) -> Result<()> {
         v2::set_trader_profit_share(ctx, trader_profit_share_bps)
+    }
+
+    pub fn request_pending_deposit_v2(
+        ctx: Context<RequestPendingDepositV2>, amount: u64,
+    ) -> Result<()> {
+        v2::request_pending_deposit(ctx, amount)
+    }
+
+    pub fn cancel_pending_deposit_v2(
+        ctx: Context<CancelPendingDepositV2>, amount: u64,
+    ) -> Result<()> {
+        v2::cancel_pending_deposit(ctx, amount)
+    }
+
+    pub fn activate_pending_deposit_v2(
+        ctx: Context<ActivatePendingDepositV2>,
+    ) -> Result<()> {
+        v2::activate_pending_deposit(ctx)
     }
 
     pub fn deposit_vault_v2(ctx: Context<DepositVaultV2>, amount: u64) -> Result<()> {
