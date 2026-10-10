@@ -380,6 +380,18 @@ mod tests {
   assert_eq!(vault.total_shares,250);
   assert_eq!(vault.pending_usdc_total,50);
  }
+ #[test] fn share_revision_cannot_be_rewound_by_equal_mint_and_burn() {
+  let mut vault=v(1,Pubkey::new_unique(),100);
+  vault.total_shares=100;
+  vault.share_revision=2;
+  let opening_revision=vault.share_revision;
+  vault.total_shares+=10;
+  vault.share_revision+=1;
+  vault.total_shares-=10;
+  vault.share_revision+=1;
+  assert_eq!(vault.total_shares,100);
+  assert_ne!(vault.share_revision,opening_revision);
+ }
  #[test] fn independent_vault_trade_rules() {
   let bot=Pubkey::new_unique();
   assert!(v(1,bot,100).check_trade(90,500).is_ok());
