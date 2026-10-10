@@ -19,8 +19,8 @@ pub mod math;
 pub mod state;
 pub mod v2;
 pub mod trade_snapshots;
-pub use trade_snapshots::{OpenTradeSnapshotV2,CheckpointParticipantV2};
-use trade_snapshots::{__client_accounts_open_trade_snapshot_v2,__client_accounts_checkpoint_participant_v2};
+pub use trade_snapshots::OpenTradeSnapshotV2;
+use trade_snapshots::__client_accounts_open_trade_snapshot_v2;
 pub use v2::{CreateVaultV2, ManageVaultV2, DepositVaultV2, WithdrawVaultV2, RequestPendingDepositV2, CancelPendingDepositV2, ActivatePendingDepositV2};
 use v2::{__client_accounts_create_vault_v2, __client_accounts_manage_vault_v2, __client_accounts_deposit_vault_v2, __client_accounts_withdraw_vault_v2, __client_accounts_request_pending_deposit_v2, __client_accounts_cancel_pending_deposit_v2, __client_accounts_activate_pending_deposit_v2};
 
@@ -42,12 +42,6 @@ pub mod pactum_vault {
         ctx: Context<OpenTradeSnapshotV2>, trade_id: [u8;32],
     ) -> Result<()> {
         trade_snapshots::open(ctx,trade_id)
-    }
-
-    pub fn checkpoint_participant_v2(
-        ctx: Context<CheckpointParticipantV2>,
-    ) -> Result<()> {
-        trade_snapshots::checkpoint(ctx)
     }
 
     pub fn create_vault_v2(ctx: Context<CreateVaultV2>, vault_id: [u8; 32],
