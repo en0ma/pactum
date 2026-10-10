@@ -1,3 +1,9 @@
+## Canonical event ID binding
+
+`observed_event_id(vault,signature,event_index)` translates the full 64-byte Solana transaction signature, event index and vault into the fixed 32-byte event ID used by `TradeEventV2`. `validate_observed_event_parent` now rejects a record if its vault, parent order or event ID differs from the canonical identity for that exact observed transaction event. Tests reject altered signatures and event positions. This closes a model-level gap where a 32-byte event ID could otherwise be chosen independently of the transaction-reference tuple.
+
+An event ID is **not proof of an emitted event**. No externally provided signature or event body is trusted for an on-chain ledger write until DFlow provenance can be verified. No bot or protocol keeper can currently invoke an exposed V2 event-accounting instruction.
+
 ## Vault-scoped DFlow event identity and parent binding
 
 `observed_event_address(vault, transaction_signature, event_index)` now derives a deterministic PDA from the vault, both complete 32-byte halves of the 64-byte Solana transaction signature, and the event's index within that transaction. It distinguishes multiple fills in one transaction, collisions between vaults, and different transactions; no keeper-chosen nonce or truncated signature is involved. `validate_event_parent` checks that a candidate fill/refund record belongs to exactly the intended vault and registered parent order, with the expected event ID and compatible quantities. Regression tests cover identity uniqueness and mismatched parent records.
