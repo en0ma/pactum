@@ -143,6 +143,7 @@ pub struct WithdrawVaultV2<'info> {
     #[account(mut, address=vault.usdc_vault, token::mint=usdc_mint, token::authority=authority)]
     pub vault_usdc: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 // Queued deposits are held outside active trading USDC. This enables
 // requests and cancellations while previous trades are still open.
@@ -215,6 +216,7 @@ pub struct ActivatePendingDepositV2<'info> {
         token::mint=usdc_mint, token::authority=authority)]
     pub pending_usdc_vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 pub fn request_pending_deposit(ctx: Context<RequestPendingDepositV2>, amount: u64) -> Result<()> {
     require!(amount>0, PactumError::ZeroAmount);
