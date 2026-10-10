@@ -110,6 +110,21 @@ jobs:
             exit 1
           fi
 
+  dflow-sdk-offline:
+    if: ${{ github.event_name == 'pull_request' }}
+    name: DFlow offline SDK composition tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Test transaction composition and guards
+        run: node --test tests/dflow-compose.test.mjs
+
   dflow-quote-inspection:
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'dflow-quote') }}
     name: DFlow unsigned quote inspection (read-only)
