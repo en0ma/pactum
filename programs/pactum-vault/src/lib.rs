@@ -960,7 +960,7 @@ pub mod pactum_vault {
             .checked_sub(ctx.accounts.pending_order.refund_usdc_balance_before)
             .ok_or(PactumError::MathOverflow)?;
         require!(
-            refund_usdc >= ctx.accounts.pending_order.cost_basis_usdc,
+            refund_usdc == ctx.accounts.pending_order.cost_basis_usdc,
             PactumError::InvalidDflowRefund
         );
 
