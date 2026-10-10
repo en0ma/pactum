@@ -205,7 +205,7 @@ jobs:
             for case_label in partial-a partial-b; do
               DFLOW_JUNE_CASE="$case_label" node scripts/inspect-dflow-persistent-state.mjs > "artifacts/dflow-state-$case_label.json"
             done
-            node -e 'const fs=require("fs"); const out=["partial-a","partial-b"].map(c=>{const x=JSON.parse(fs.readFileSync("artifacts/dflow-state-"+c+".json","utf8"));return {case:c,order:x.order,market:x.market,orderExists:x.accounts.order?.exists!==false,marketExists:x.accounts.market?.exists!==false,marketOwner:x.accounts.market?.owner??null,marketBytes:x.accounts.market?.dataLength??null,hasPersistentOrderAmounts:x.hasPersistentOrderAmounts}});fs.writeFileSync("artifacts/dflow-historical-state.json",JSON.stringify({status:"checked",cases:out},null,2))'
+            node -e 'const fs=require("fs"); const out=["partial-a","partial-b"].map(c=>{const x=JSON.parse(fs.readFileSync("artifacts/dflow-state-"+c+".json","utf8"));return {case:c,order:x.order,market:x.market,orderExists:x.accounts.order?.exists!==false,marketExists:x.accounts.market?.exists!==false,marketOwner:x.accounts.market?.owner??null,marketBytes:x.accounts.market?.dataLength??null,orderPubkeyOffsetsInMarket:x.orderPubkeyOffsetsInMarket,hasPersistentOrderAmounts:x.hasPersistentOrderAmounts}});fs.writeFileSync("artifacts/dflow-historical-state.json",JSON.stringify({status:"checked",cases:out},null,2))'
           fi
       - name: Upload real historical account observation
         if: always()
