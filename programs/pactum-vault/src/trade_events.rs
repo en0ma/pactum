@@ -123,6 +123,36 @@ impl TradeEventV2 {
 }
 /// Deterministic per-vault uniqueness: event IDs cannot be registered twice
 /// within the same vault; the same bytes in another vault are independent.
+/// Canonical identity of an observed event in a finalized Solana transaction.
+/// The two 32-byte signature halves are PDA seeds, so no hash truncation or
+/// keeper-selected arbitrary event ID is needed. Only use a signature after
+/// verifying the transaction was finalized and emitted by the DFlow program.
+/// Including vault scopes replay rejection independently per vault.
+pub fn observed_event_address(
+    vault:Pubkey, transaction_signature:[u8;64], event_index:u32,
+)->Pubkey {
+    let index=event_index.to_le_bytes();
+    Pubkey::find_program_address(
+        &[b"v2_observed_event",vault.as_ref(),
+          &transaction_signature[..32],&transaction_signature[32..],&index],
+        &crate::ID,
+    ).0
+}
+
+/// Reject an event being bound to the wrong parent order or vault.
+/// Actual account creation, event provenance verification and value mutations
+/// must be atomic; this validator alone is never settlement authority.
+pub fn validate_event_parent(
+    event:&TradeEventV2, expected_vault:Pubkey, expected_order:Pubkey,
+    expected_event_id:[u8;32],
+)->Result<()> {
+    require_keys_eq!(event.vault,expected_vault,PactumError::InvalidMarketExposure);
+    require_keys_eq!(event.order,expected_order,PactumError::InvalidMarketExposure);
+    require!(event.event_id==expected_event_id,PactumError::InvalidDflowFixture);
+    validate_event_record(event.vault,expected_vault,event.kind,
+        event.input_usdc,event.outcome_atoms,event.refund_usdc)
+}
+
 pub fn trade_event_address(vault:Pubkey,event_id:[u8;32])->Pubkey {
     Pubkey::find_program_address(&[b"v2_trade",vault.as_ref(),event_id.as_ref()],&crate::ID).0
 }
@@ -329,6 +359,24 @@ mod tests {
   let mut malformed=data.to_vec();
   malformed.extend_from_slice(&[17u8;32]);
   assert!(validate_observed_redeem_instruction(&malformed).is_err());
+ }
+ #[test] fn confirmed_event_identity_is_unique_per_vault_tx_and_event_position() {
+  let vault=Pubkey::new_unique();let other=Pubkey::new_unique();
+  let signature=[7u8;64];let mut changed=signature;changed[63]=8;
+  let base=observed_event_address(vault,signature,0);
+  assert_eq!(base,observed_event_address(vault,signature,0));
+  assert_ne!(base,observed_event_address(vault,signature,1));
+  assert_ne!(base,observed_event_address(other,signature,0));
+  assert_ne!(base,observed_event_address(vault,changed,0));
+ }
+ #[test] fn event_parent_rejects_wrong_order_or_vault() {
+  let vault=Pubkey::new_unique();let order=Pubkey::new_unique();let id=[2u8;32];
+  let event=TradeEventV2{vault,order,event_id:id,kind:EVENT_FILL,input_usdc:5,
+    outcome_atoms:12,refund_usdc:0,reconciled:false,bump:1};
+  assert!(validate_event_parent(&event,vault,order,id).is_ok());
+  assert!(validate_event_parent(&event,vault,Pubkey::new_unique(),id).is_err());
+  assert!(validate_event_parent(&event,Pubkey::new_unique(),order,id).is_err());
+  assert!(validate_event_parent(&event,vault,order,[3u8;32]).is_err());
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
