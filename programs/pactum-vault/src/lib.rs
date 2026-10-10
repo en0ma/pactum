@@ -855,7 +855,14 @@ pub mod pactum_vault {
             .amount
             .checked_sub(ctx.accounts.pending_order.refund_usdc_balance_before)
             .ok_or(PactumError::MathOverflow)?;
-        let recognized_refund_usdc = refund_usdc.min(ctx.accounts.pending_order.cost_basis_usdc);
+        // Never silently cap excess USDC credited to a shared refund account.
+        // It could originate from another order or an unsolicited transfer;
+        // either case makes this order's terminal refund attribution ambiguous.
+        require!(
+            refund_usdc <= ctx.accounts.pending_order.cost_basis_usdc,
+            PactumError::InvalidDflowRefund
+        );
+        let recognized_refund_usdc = refund_usdc;
         let consumed_usdc = ctx
             .accounts
             .pending_order
