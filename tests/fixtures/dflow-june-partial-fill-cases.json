@@ -1,0 +1,23 @@
+{
+  "sourceArtifact": 11532353903,
+  "cases": [
+    {
+      "label": "partial-a",
+      "open": 225980475,
+      "fill": 221098384,
+      "outcome": 481000000,
+      "refundDelta": 4882091,
+      "refundOwnerMatchesOpen": true,
+      "refundSourceMatchesOpen": true
+    },
+    {
+      "label": "partial-b",
+      "open": 9301888,
+      "fill": 9294288,
+      "outcome": 12000000,
+      "refundDelta": 7600,
+      "refundOwnerMatchesOpen": true,
+      "refundSourceMatchesOpen": true
+    }
+  ]
+}
