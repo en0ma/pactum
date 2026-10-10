@@ -147,7 +147,7 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
       - name: Test transaction composition and guards
-        run: node --test tests/dflow-compose.test.mjs tests/dflow-reconciliation-evidence.test.mjs tests/dflow-event-inspection.test.mjs tests/dflow-june-partial-fill.test.mjs
+        run: node --test tests/dflow-compose.test.mjs tests/dflow-reconciliation-evidence.test.mjs tests/dflow-event-inspection.test.mjs tests/dflow-june-partial-fill.test.mjs tests/dflow-persistent-state.test.mjs
 
   dflow-quote-inspection:
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'dflow-quote') }}
