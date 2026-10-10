@@ -12,6 +12,7 @@ use anchor_spl::token_interface::{
 use solana_cpi::invoke;
 use solana_instruction::{AccountMeta, Instruction};
 
+pub mod accounting;
 pub mod dflow;
 pub mod error;
 pub mod math;
