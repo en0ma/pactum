@@ -92,6 +92,45 @@ pub fn checkpoint(ctx:Context<CheckpointParticipantV2>)->Result<()> {
     c.bump=ctx.bumps.participant;
     Ok(())
 }
+/// Read-only proof. Optional checkpoint accounts are verified by their
+/// canonical PDAs before their historical balances can be considered.
+#[derive(Accounts)]
+pub struct VerifyTradeParticipationV2<'info> {
+    /// CHECK: bound to the position's owner and the checkpoint PDAs.
+    pub depositor: UncheckedAccount<'info>,
+    #[account(seeds=[b"vault",vault.vault_id.as_ref()],bump=vault.config_bump)]
+    pub vault: Account<'info,VaultV2>,
+    #[account(seeds=[b"trade_snapshot",vault.key().as_ref(),trade.trade_id.as_ref()],
+        bump=trade.bump,has_one=vault)]
+    pub trade: Account<'info,TradeSnapshotV2>,
+    #[account(seeds=[b"v2_position",vault.key().as_ref(),depositor.key().as_ref()],
+        bump=position.bump,constraint=position.owner==depositor.key())]
+    pub position: Account<'info,VaultV2Position>,
+    pub before: Option<Account<'info,ShareCheckpointV2>>,
+    pub after: Option<Account<'info,ShareCheckpointV2>>,
+}
+pub fn verify_participation(ctx:Context<VerifyTradeParticipationV2>) -> Result<()> {
+    let depositor=ctx.accounts.depositor.key();
+    let vault=ctx.accounts.vault.key();
+    let pos=&ctx.accounts.position;
+    for checkpoint in [ctx.accounts.before.as_ref(),ctx.accounts.after.as_ref()].into_iter().flatten() {
+        let (expected, bump)=Pubkey::find_program_address(
+            &[b"share_checkpoint",pos.key().as_ref(),
+                checkpoint.mutation_index.to_le_bytes().as_ref()], &crate::ID);
+        require_keys_eq!(checkpoint.key(),expected,PactumError::InvalidMarketExposure);
+        require!(checkpoint.bump==bump,PactumError::InvalidMarketExposure);
+    }
+    let eligible=verify_opening_balance(
+        ctx.accounts.trade.share_revision_at_open,
+        ctx.accounts.before.as_deref(),
+        ctx.accounts.after.as_deref(),
+        depositor,vault,pos.share_mutations)?;
+    require!(eligible<=ctx.accounts.trade.total_shares_at_open,
+        PactumError::InvalidMarketExposure);
+    msg!("Historical trade-opening eligible shares: {}",eligible);
+    Ok(())
+}
+
 /// Validate a depositor's historical balance at the immutable trade-open
 /// revision, using the *consecutive* before/after checkpoint pair.
 /// The recorded account owners and PDA seeds must also be enforced by the
