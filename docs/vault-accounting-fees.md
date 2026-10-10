@@ -1,3 +1,11 @@
+## DFlow program events: protocol-keeper observation versus on-chain authorization
+
+The protocol keeper (separate from the trading bot) monitors actual DFlow PredictionMarkets `EmitEvent` instructions. DFlow's published schema uses the 8-byte `f0 00 00 00 00 00 00 00` discriminator, event type `2` for `UserOrderEvent` and `3` for `UserRedeemEvent`; order event subtypes are Open=1, Fill=2, Cancel=3, Revert=4. Order lifecycle events include `userOrder`, linking opening and subsequent fills/cancellations to a parent order. The new `classify_dflow_emit_event` helper parses **only this documented header**; the remaining event fields require full authoritative IDL decoding. **The helper does not authenticate a historical transaction or enable payouts.**
+
+The keeper should index finalized Solana transactions, reject program-ID mismatches, decode true instruction/event contents and associate `userOrder` with the vault-scoped order registry; events need stable transaction-signature-plus-event-index identities to prevent replay. However, Solana programs cannot look up arbitrary previously finalized transaction logs using a transaction signature alone. An event body forwarded in a later keeper instruction is untrusted bytes even when it looks well-formed. Therefore `TradeEventV2` mutations remain unexposed pending an on-chain-verifiable mechanism, such as DFlow-owned persistent state with proven semantics or an approved proof-verification pathway. The keeper may observe and submit transaction references, but not attest monetary values.
+
+DFlow documents `UserRedeemEvent` separately; no confirmed on-chain evidence in this branch establishes an original purchase-order ID inside that event. Do not assume one exists. Redemption attribution may instead depend on verified market, outcome token account, quantities and per-order inventory and cost basis.
+
 ## DFlow terminal evidence validation — partial implementation
 
 The V2 `reconcile_terminal_deltas` helper checks DFlow order closure, monotonic vault-custody outcome/refund token balances, bounded refunds, full-refund consistency, and the verified quote's prorated minimum outcome quantity. This builds on V1's terminal-order accounting and has adversarial unit tests.
