@@ -72,6 +72,32 @@ pub fn validate_decoded_order_fill(
     require!(event.input_amount>0 && event.output_amount>0,PactumError::InvalidDflowFixture);
     Ok(())
 }
+/// Stage a decoded DFlow fill against its registered parent order.
+/// This combines the existing order-identity checks and cumulative bounds;
+/// the protocol keeper must still establish authentic event provenance before
+/// writing these projected values to persistent order/trade accounts.
+pub fn project_decoded_order_fill(
+    current:OrderReconciliationV2,
+    event:&DecodedUserOrderEvent,
+    order_account:Pubkey,
+    expected_outcome_mint:Pubkey,
+    original_input_usdc:u64,
+)->Result<OrderReconciliationV2> {
+    validate_decoded_order_fill(
+        event,order_account,crate::dflow::USDC_MINT,expected_outcome_mint)?;
+    let mut next=current;
+    next.apply(original_input_usdc,EVENT_FILL,
+        event.input_amount,event.output_amount,0,false)?;
+    Ok(next)
+}
+
+/// A DFlow redeem instruction is market/outcome-based, not an order-account
+/// reference: the observed action data is exactly 8 bytes. Do not infer
+/// an originating order identifier from those instruction bytes.
+pub fn validate_observed_redeem_instruction(data:&[u8])->Result<()> {
+    crate::dflow::prediction_v1::validate_redeem_data(data)
+}
+
 /// Stable event keys must identify the concrete event position, not just
 /// a transaction: one finalized Solana transaction may emit several fills.
 pub fn event_identity_components(signature:[u8;64],event_position:u32)->([u8;64],u32) {
@@ -279,6 +305,30 @@ mod tests {
  #[test] fn two_events_in_same_transaction_have_distinct_identities() {
   let signature=[9u8;64];
   assert_ne!(event_identity_components(signature,0),event_identity_components(signature,1));
+ }
+ #[test] fn projected_confirmed_fill_binds_order_and_never_mutates_on_failure() {
+  let order=Pubkey::new_unique();let outcome=Pubkey::new_unique();
+  let mut event=DecodedUserOrderEvent{
+   kind:ObservedDflowEventKind::OrderFill,user_order:order,
+   input_mint:crate::dflow::USDC_MINT,input_amount:60,output_mint:outcome,
+   output_amount:100,fee_mint:crate::dflow::USDC_MINT,fee_amount:1,
+  };
+  let initial=OrderReconciliationV2::default();
+  let next=project_decoded_order_fill(initial,&event,order,outcome,100).unwrap();
+  assert_eq!(next.filled_usdc,60);
+  assert_eq!(next.outcome_atoms,100);
+  assert_eq!(initial,OrderReconciliationV2::default());
+  assert!(project_decoded_order_fill(next,&event,order,outcome,100).is_err());
+  event.user_order=Pubkey::new_unique();
+  assert!(project_decoded_order_fill(initial,&event,order,outcome,100).is_err());
+ }
+ #[test] fn redeem_instruction_fixture_has_no_order_id_in_data() {
+  let data=crate::dflow::prediction_v1::redeem_market_outcome_data();
+  assert_eq!(data.len(),8);
+  validate_observed_redeem_instruction(&data).unwrap();
+  let mut malformed=data.to_vec();
+  malformed.extend_from_slice(&[17u8;32]);
+  assert!(validate_observed_redeem_instruction(&malformed).is_err());
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
