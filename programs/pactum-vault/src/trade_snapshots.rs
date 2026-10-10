@@ -21,10 +21,12 @@ pub struct OrderRecordV2 {
     pub order_account: Pubkey,
     pub market_ledger: Pubkey,
     pub input_amount_usdc: u64,
+    /// Cumulative verified execution accounting, initially empty.
+    pub reconciliation: crate::trade_events::OrderReconciliationV2,
     pub bump: u8,
 }
 impl OrderRecordV2 {
-    pub const LEN:usize=32+32+1+1+8+2+32+8+8+2+32+32+8+1;
+    pub const LEN:usize=32+32+1+1+8+2+32+8+8+2+32+32+8+8+8+8+8+1+1;
 }
 
 #[account]
@@ -171,6 +173,7 @@ pub fn open(ctx:Context<RegisterOrderV2>,order_id:[u8;32],
     t.order_account=ctx.accounts.order_account.key();
     t.market_ledger=ctx.accounts.market_ledger.key();
     t.input_amount_usdc=input_amount;
+    t.reconciliation=crate::trade_events::OrderReconciliationV2::default();
     t.bump=ctx.bumps.trade;
     Ok(())
 }
