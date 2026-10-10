@@ -1,3 +1,14 @@
+## Live Solana RPC evidence — recovered June order/market state (10 October 2026)
+
+CI [run #370](https://github.com/en0ma/pactum/actions/runs/38085657327), artifact `dflow-historical-state` (11682356610), **actually executed** read-only finalized-commitment `getAccountInfo` RPC calls for both cases pinned in `tests/fixtures/dflow-june-partial-fill-cases.json`:
+
+| Case | Order account exists | Market ledger exists | Ledger owner | Ledger data length |
+| --- | --- | --- | --- | --- |
+| partial-a (`9UzowLyvmrUyWqnTZiH8zJonWe67CfYfabAg3FgYX1Mj`) | no | yes | `pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb` | 568 |
+| partial-b (`An6C9tE27PdMbioEfJZ5qXNMhU1iSc4pxzGtnQYD6frg`) | no | yes | `pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb` | 568 |
+
+This is **real current chain state**, distinct from the archived June logs and mocked tests. The former temporary orders are absent; their market-level ledgers remain DFlow-owned. `hasPersistentOrderAmounts: false` in the inspector is a deliberate **not verified** indicator: no order-level amount decoding was performed, so it must not be interpreted as evidence that the ledgers contain no such data. The read-only CI artifact contains no RPC credentials. Financial reconciliation remains gated until independent on-chain per-order amount evidence or atomic execution-time verification is implemented.
+
 ## Real June order-to-market mappings recovered
 
 The June archive (CI run #207, artifact `dflow-mainnet-june`, 11532353903) explicitly gives the following DFlow account relationships:
