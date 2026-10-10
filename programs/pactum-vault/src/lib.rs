@@ -18,6 +18,7 @@ pub mod math;
 pub mod state;
 pub mod v2;
 pub use v2::{CreateVaultV2, ManageVaultV2, DepositVaultV2, WithdrawVaultV2};
+use v2::{__client_accounts_create_vault_v2, __client_accounts_manage_vault_v2, __client_accounts_deposit_vault_v2, __client_accounts_withdraw_vault_v2};
 
 use error::PactumError;
 use state::{
