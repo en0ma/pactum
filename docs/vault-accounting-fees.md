@@ -1,3 +1,9 @@
+## Fail-closed dual-state reconciliation transition
+
+`verify_reconciliation_transition` is a *pure validator* for future authenticated event ingestion. It requires both the approved DFlow-evidence verification result **and** exact Pactum vault, parent order and pre-transition cumulative state. It recomputes the proposed transition from the actual pre-state with overflow, event-shape and principal limits, then requires that the proposed new state match byte-for-byte. Tests reject unauthenticated keeper assertions, cross-vault and cross-order substitutions, stale before-state and forged new totals. No keeper or bot currently has an instruction that can set the authentication result. The `authenticated` flag is an internal API argument; passing `true` from external keeper data would completely defeat this protection and is forbidden.
+
+Crucially, the missing component is an actual on-chain verifier of DFlow-owned state or atomic execution. This commit does not pretend that a signature or off-chain event body constitutes that verification and **does not expose write access to the V2 event ledger**.
+
 ## Protocol keeper trust boundary — finalized DFlow observations
 
 The protocol reconciliation keeper is **not the source of truth** for filled principal, refunds, redemption or PnL. DFlow on-chain state and confirmed program executions are the source. Solana programs can inspect supplied accounts and instructions in their *current* transaction but cannot query historical transaction logs by signature from within Anchor. Thus an off-chain finalized DFlow event decoded by the keeper does not automatically become an on-chain proof.
