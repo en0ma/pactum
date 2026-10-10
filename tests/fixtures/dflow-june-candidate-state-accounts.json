@@ -1,0 +1,7 @@
+{
+ "source":{"run":37736541881,"artifact":11532353903,"description":"DFlow action 0x10 and 0x41 account metas from archived, confirmed order transactions; identities are candidates only"},
+ "cases":[
+  {"case":"partial-a","order":"9UzowLyvmrUyWqnTZiH8zJonWe67CfYfabAg3FgYX1Mj","accounts":["3jam5e4STRVrxytJEMK55C2pvoiteyoMhiY5rqVmf3Jq","GhMbFDEpzAzkCKJHbvAAChyXWbCPjMJhL1DLTn5r1tf","JBja8ibg25HoPnDWJmfv5CT76SZxrRsd5E5pHeHLiPgr","EdnM9VUPw8x1BNe4jCmwxMRuxJvpdiHxjowRmYGQ7ZzR","CRHgi5nz7Hx7QDgA7BE7xKP5fEUqU6eg4p7sHARkEK2W"]},
+  {"case":"partial-b","order":"An6C9tE27PdMbioEfJZ5qXNMhU1iSc4pxzGtnQYD6frg","accounts":["AMwdJG2XFN2Fu2PNPSJ1cm6p7dGtm6Vog8kNTm1bd6Au","9PdfRPLSkUkNFeA9CDuYCKBfYr6mSJB5qYFkJ6Vxm1Pa","5xtjosuaP2ScuHGmdtMwTGQNZqiBrymdUFK1gzCmMzJn","BQMZmtSVw6NiSTVTBsA9Z483No27mvRrRQrYSzJPL6ki","CRHgi5nz7Hx7QDgA7BE7xKP5fEUqU6eg4p7sHARkEK2W"]}
+ ]
+}
