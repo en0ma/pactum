@@ -232,6 +232,36 @@ impl OrderReconciliationV2 {
     }
 }
 
+/// Finalize an order after **all** separately identified fills/refunds have
+/// been reconciled. The final DFlow order-closed state must be proven by
+/// the caller. No synthetic fill/refund event is needed for closure.
+/// Checks cumulative price protection over the *actual* consumed principal,
+/// including partial fills and full refunds, before marking terminal.
+pub fn project_terminal_order(
+    current:OrderReconciliationV2,
+    original_input_usdc:u64,
+    quoted_outcome_atoms:u64,
+    slippage_bps:u16,
+    dflow_order_closed:bool,
+)->Result<OrderReconciliationV2> {
+    require!(dflow_order_closed,PactumError::DflowFillNotObserved);
+    require!(!current.terminal,PactumError::InvalidDflowRefund);
+    require!(original_input_usdc>0,PactumError::ZeroAmount);
+    let accounted=current.filled_usdc.checked_add(current.refunded_usdc)
+        .ok_or(PactumError::MathOverflow)?;
+    require!(accounted==original_input_usdc,PactumError::InvalidDflowRefund);
+    if current.filled_usdc==0 {
+        require!(current.outcome_atoms==0,PactumError::InvalidDflowFixture);
+    } else {
+        let minimum=crate::dflow::prediction_v1::minimum_outcome_for_consumed_input(
+            quoted_outcome_atoms,original_input_usdc,current.filled_usdc,slippage_bps)?;
+        require!(current.outcome_atoms>=minimum,PactumError::InvalidDflowFixture);
+    }
+    let mut next=current;
+    next.terminal=true;
+    Ok(next)
+}
+
 /// Terminal evidence as differences from order-opening custody snapshots.
 /// Exclusive attribution to this order must be established elsewhere.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -410,6 +440,27 @@ mod tests {
   let mut different=signature;different[40]=5;
   assert!(validate_observed_event_parent(&event,vault,order,different,5).is_err());
   assert_eq!(id,observed_event_id(vault,signature,5));
+ }
+ #[test] fn terminal_projection_requires_verified_closure_and_all_principal() {
+  let mut r=OrderReconciliationV2::default();
+  r.apply(100,EVENT_FILL,60,70,0,false).unwrap();
+  assert!(project_terminal_order(r,100,100,100,false).is_err());
+  assert!(project_terminal_order(r,100,100,100,true).is_err());
+  r.apply(100,EVENT_REFUND,0,0,40,false).unwrap();
+  assert!(project_terminal_order(r,100,120,0,true).is_err());
+  let done=project_terminal_order(r,100,100,100,true).unwrap();
+  assert!(done.terminal);
+  assert_eq!(done.event_count,2);
+  assert_eq!(r.terminal,false);
+  assert!(project_terminal_order(done,100,100,100,true).is_err());
+ }
+ #[test] fn fully_refunded_order_terminal_without_fake_fill() {
+  let mut r=OrderReconciliationV2::default();
+  r.apply(100,EVENT_REFUND,0,0,100,false).unwrap();
+  let closed=project_terminal_order(r,100,100,100,true).unwrap();
+  assert!(closed.terminal);
+  assert_eq!(closed.outcome_atoms,0);
+  assert_eq!(closed.filled_usdc,0);
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
