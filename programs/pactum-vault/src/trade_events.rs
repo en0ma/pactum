@@ -86,6 +86,49 @@ impl OrderReconciliationV2 {
     }
 }
 
+/// Terminal evidence as differences from order-opening custody snapshots.
+/// Exclusive attribution to this order must be established elsewhere.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct TerminalOrderDeltas {
+    pub order_closed: bool,
+    pub outcome_start: u64,
+    pub outcome_end: u64,
+    pub refund_start: u64,
+    pub refund_end: u64,
+}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct TerminalOrderResult {
+    pub consumed_usdc:u64,
+    pub refunded_usdc:u64,
+    pub outcome_atoms:u64,
+}
+/// Checked terminal accounting, NOT an authenticated per-event DFlow receipt.
+pub fn reconcile_terminal_deltas(
+    input_usdc:u64,
+    quoted_outcome_atoms:u64,
+    slippage_bps:u16,
+    deltas:TerminalOrderDeltas,
+)->Result<TerminalOrderResult> {
+    require!(deltas.order_closed,PactumError::DflowFillNotObserved);
+    require!(input_usdc>0,PactumError::ZeroAmount);
+    let outcome_atoms=deltas.outcome_end.checked_sub(deltas.outcome_start)
+        .ok_or(PactumError::InvalidDflowRefund)?;
+    let refunded_usdc=deltas.refund_end.checked_sub(deltas.refund_start)
+        .ok_or(PactumError::InvalidDflowRefund)?;
+    require!(refunded_usdc<=input_usdc,PactumError::InvalidDflowRefund);
+    let consumed_usdc=input_usdc.checked_sub(refunded_usdc)
+        .ok_or(PactumError::MathOverflow)?;
+    if consumed_usdc==0 {
+        require!(outcome_atoms==0,PactumError::InvalidDflowFixture);
+    } else {
+        require!(outcome_atoms>0,PactumError::DflowFillNotObserved);
+        let minimum=crate::dflow::prediction_v1::minimum_outcome_for_consumed_input(
+            quoted_outcome_atoms,input_usdc,consumed_usdc,slippage_bps)?;
+        require!(outcome_atoms>=minimum,PactumError::InvalidDflowFixture);
+    }
+    Ok(TerminalOrderResult{consumed_usdc,refunded_usdc,outcome_atoms})
+}
+
 #[cfg(test)]
 mod tests {
  use super::*;
@@ -111,6 +154,34 @@ mod tests {
   assert!(a.apply(100,EVENT_REFUND,0,0,21,true).is_err());
   assert_eq!(a.filled_usdc,80);
   assert_eq!(a.refunded_usdc,0);
+ }
+ #[test] fn terminal_order_partial_fill_and_refund() {
+  let d=TerminalOrderDeltas{order_closed:true,outcome_start:15,outcome_end:85,
+       refund_start:20,refund_end:60};
+  let r=reconcile_terminal_deltas(100,100,100,d).unwrap();
+  assert_eq!(r.consumed_usdc,60);
+  assert_eq!(r.refunded_usdc,40);
+  assert_eq!(r.outcome_atoms,70);
+ }
+ #[test] fn terminal_order_rejects_unclosed_overrefund_and_underfill() {
+  let mut d=TerminalOrderDeltas{order_closed:false,outcome_start:0,outcome_end:60,
+       refund_start:0,refund_end:40};
+  assert!(reconcile_terminal_deltas(100,100,0,d).is_err());
+  d.order_closed=true;
+  d.refund_end=101;
+  assert!(reconcile_terminal_deltas(100,100,0,d).is_err());
+  d.refund_end=40;d.outcome_end=59;
+  assert!(reconcile_terminal_deltas(100,100,0,d).is_err());
+  d.outcome_end=60;d.outcome_start=61;
+  assert!(reconcile_terminal_deltas(100,100,0,d).is_err());
+ }
+ #[test] fn terminal_full_refund_requires_zero_outcome() {
+  let mut d=TerminalOrderDeltas{order_closed:true,outcome_start:0,outcome_end:1,
+       refund_start:0,refund_end:100};
+  assert!(reconcile_terminal_deltas(100,100,100,d).is_err());
+  d.outcome_end=0;
+  let r=reconcile_terminal_deltas(100,100,100,d).unwrap();
+  assert_eq!(r.consumed_usdc,0);
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
