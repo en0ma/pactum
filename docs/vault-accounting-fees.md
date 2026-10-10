@@ -51,4 +51,16 @@ Fundamental invariants:
 
 `programs/pactum-vault/src/accounting.rs` implements the fixed 1% protocol arithmetic and configurable bot share of remaining positive profit, **not** on-chain fee transfers or trade-specific entitlement snapshots. `VaultV2` stores `trader_profit_share_bps`, settable by admin via `set_vault_trader_fee_v2`.
 
-The current V2 deposit and withdrawal instructions **still reject while exposure/positions are open**; supporting Bob's mid-trade deposit with participation beginning at Trade #2 requires new cohort accounting and is not implemented yet. Live DFlow execution and performance-fee routing remain disabled until the snapshot and reconciliation logic are tested.
+V2 now has **request_pending_deposit_v2**, **cancel_pending_deposit_v2** and **activate_pending_deposit_v2**. Requests transfer USDC into a separate, per-vault escrow and do not mint active shares, so Bob may request a deposit during Trade #1. A user may cancel some/all pending USDC from escrow at any time, before activation. At a no-open-exposure cutoff, activation transfers pending USDC into the active vault and mints shares at the active, post-settlement NAV. A fresh trade after activation may include Bob.
+
+**Important:** Current activation checks `open_exposure_usdc == 0 && open_positions == 0` but does **not yet** prove all fee transfers and realized PnL snapshots have been reconciled. Pending activation must remain disabled in live deployments until that settlement checkpoint is enforceable. The previous direct `deposit_vault_v2` still exists and is restricted to exposure-free states; UI should use the pending request flow. Live DFlow execution, per-trade ownership snapshots and performance-fee routing remain disabled.
+
+## Pending-deposit queue mechanics
+
+- Pending USDC lives in a separate vault-specific SPL token account, `[b"pending_usdc", vault_config]`, owned by the corresponding vault authority PDA. It must not be used as keeper trading collateral.
+- `VaultV2.pending_usdc_total` counts the sum of pending amounts; each `VaultV2Position.pending_usdc` holds the depositor's refundable claim.
+- `request_pending_deposit_v2(amount)` accepts a deposit independently of open positions and moves real USDC into segregated escrow.
+- `cancel_pending_deposit_v2(amount)` requires that depositor's signature, refunds precisely the requested pending amount, and leaves active shares unchanged.
+- `activate_pending_deposit_v2()` is permissionless after the no-open-exposure accounting cutoff and activates that depositor's entire pending amount by minting shares at current NAV before moving escrow USDC to the active vault.
+- Cancellation and activation in one Solana transaction are atomic; after activation there is no refundable pending balance. To exit active capital the depositor uses the withdrawal process and its risk restrictions.
+- The dApp must distinguish **pending refundable USDC** from **active capital/shares**, show both balances and offer a cancellation action until activation.
