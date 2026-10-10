@@ -22,6 +22,8 @@ pub enum PactumError {
     InvalidRiskLimits,
     #[msg("Unauthorized admin")]
     UnauthorizedAdmin,
+    #[msg("Keeper is not the active bot assigned to this vault")]
+    UnauthorizedKeeper,
     #[msg("Market configuration is disabled")]
     MarketDisabled,
     #[msg("Trade amount exceeds the per-trade risk limit")]
