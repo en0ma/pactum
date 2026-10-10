@@ -51,6 +51,12 @@ pub mod pactum_vault {
         v2::set_rules(ctx,max_trade_usdc,max_total_exposure_usdc,min_liquidity_buffer_usdc,paused)
     }
 
+    pub fn set_vault_trader_fee_v2(
+        ctx: Context<ManageVaultV2>, trader_profit_share_bps: u16,
+    ) -> Result<()> {
+        v2::set_trader_profit_share(ctx, trader_profit_share_bps)
+    }
+
     pub fn deposit_vault_v2(ctx: Context<DepositVaultV2>, amount: u64) -> Result<()> {
         v2::deposit(ctx,amount)
     }
