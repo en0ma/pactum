@@ -277,6 +277,15 @@ pub mod pactum_vault {
         slippage_bps: u16,
     ) -> Result<()> {
         require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
+        // The authorization account is scoped to this specific vault config.
+        // A keeper registered for another vault, or subsequently revoked
+        // (authorization PDA closed), cannot pass this check.
+        verify_vault_keeper_authorization(
+            &ctx.accounts.config.key(),
+            &ctx.accounts.keeper.key(),
+            &ctx.accounts.keeper_authorization.key(),
+            &ctx.accounts.keeper_authorization.keeper,
+        )?;
         let now = Clock::get()?.unix_timestamp;
         let registry = &ctx.accounts.market_registry;
         require!(
@@ -1355,6 +1364,46 @@ pub mod pactum_vault {
             &[seeds],
         )
         .map_err(Into::into)
+    }
+}
+
+/// Belt-and-suspenders identity check in addition to Anchor's account seeds
+/// and owner/discriminator checks on KeeperAuthorization.
+fn verify_vault_keeper_authorization(
+    config: &Pubkey,
+    keeper: &Pubkey,
+    authorization: &Pubkey,
+    recorded_keeper: &Pubkey,
+) -> Result<()> {
+    let (expected, _) = Pubkey::find_program_address(
+        &[b"keeper", config.as_ref(), keeper.as_ref()],
+        &crate::ID,
+    );
+    require_keys_eq!(*authorization, expected, PactumError::UnauthorizedKeeper);
+    require_keys_eq!(*recorded_keeper, *keeper, PactumError::UnauthorizedKeeper);
+    Ok(())
+}
+
+#[cfg(test)]
+mod vault_keeper_authorization_tests {
+    use super::*;
+
+    #[test]
+    fn registration_is_scoped_to_vault_and_keeper() {
+        let vault_a = Pubkey::new_unique();
+        let vault_b = Pubkey::new_unique();
+        let keeper_a = Pubkey::new_unique();
+        let keeper_b = Pubkey::new_unique();
+        let (auth_a, _) = Pubkey::find_program_address(
+            &[b"keeper", vault_a.as_ref(), keeper_a.as_ref()], &crate::ID);
+        assert!(verify_vault_keeper_authorization(
+            &vault_a, &keeper_a, &auth_a, &keeper_a).is_ok());
+        assert!(verify_vault_keeper_authorization(
+            &vault_b, &keeper_a, &auth_a, &keeper_a).is_err());
+        assert!(verify_vault_keeper_authorization(
+            &vault_a, &keeper_b, &auth_a, &keeper_b).is_err());
+        assert!(verify_vault_keeper_authorization(
+            &vault_a, &keeper_a, &auth_a, &keeper_b).is_err());
     }
 }
 
