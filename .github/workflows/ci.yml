@@ -206,13 +206,16 @@ jobs:
               DFLOW_JUNE_CASE="$case_label" node scripts/inspect-dflow-persistent-state.mjs > "artifacts/dflow-state-$case_label.json"
             done
             node -e 'const fs=require("fs"); const out=["partial-a","partial-b"].map(c=>{const x=JSON.parse(fs.readFileSync("artifacts/dflow-state-"+c+".json","utf8"));return {case:c,order:x.order,market:x.market,orderExists:x.accounts.order?.exists!==false,marketExists:x.accounts.market?.exists!==false,marketOwner:x.accounts.market?.owner??null,marketBytes:x.accounts.market?.dataLength??null,orderPubkeyOffsetsInMarket:x.orderPubkeyOffsetsInMarket,hasPersistentOrderAmounts:x.hasPersistentOrderAmounts}});fs.writeFileSync("artifacts/dflow-historical-state.json",JSON.stringify({status:"checked",cases:out},null,2))'
+            node scripts/inspect-dflow-auxiliary-accounts.mjs > artifacts/dflow-auxiliary-accounts.json
           fi
       - name: Upload real historical account observation
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dflow-historical-state
-          path: artifacts/dflow-historical-state.json
+          path: |
+            artifacts/dflow-historical-state.json
+            artifacts/dflow-auxiliary-accounts.json
           if-no-files-found: warn
           retention-days: 14
 
