@@ -501,6 +501,32 @@ mod tests {
   assert!(validate_observed_event_parent(&event,vault,order,different,5).is_err());
   assert_eq!(id,observed_event_id(vault,signature,5));
  }
+ #[test] fn archived_mainnet_partial_fills_match_pactum_ledger_rules() {
+  // GitHub Actions #207 artifact 11532353903, two observed June cases.
+  // RPC event/recipient evidence is a regression fixture, NOT on-chain proof.
+  for (original,filled,outcome,refund) in [
+      (225_980_475u64,221_098_384u64,481_000_000u64,4_882_091u64),
+      (9_301_888u64,9_294_288u64,12_000_000u64,7_600u64),
+  ] {
+    assert_eq!(filled.checked_add(refund),Some(original));
+    let mut ledger=OrderReconciliationV2::default();
+    ledger.apply(original,EVENT_FILL,filled,outcome,0,false).unwrap();
+    assert!(project_terminal_order(ledger,original,outcome,0,true).is_err());
+    ledger.apply(original,EVENT_REFUND,0,0,refund,false).unwrap();
+    assert_eq!(ledger.filled_usdc,filled);
+    assert_eq!(ledger.refunded_usdc,refund);
+    assert_eq!(ledger.outcome_atoms,outcome);
+    assert_eq!(ledger.event_count,2);
+    let done=project_terminal_order(ledger,original,outcome,0,true).unwrap();
+    assert!(done.terminal);
+    assert!(done.event_count==2);
+    let mut forged=OrderReconciliationV2::default();
+    assert!(forged.apply(original,EVENT_FILL,original,outcome,0,false).is_ok());
+    assert!(forged.apply(original,EVENT_REFUND,0,0,refund,false).is_err());
+    let mut over_refund=ledger;
+    assert!(over_refund.apply(original,EVENT_REFUND,0,0,1,false).is_err());
+  }
+ }
  #[test] fn terminal_projection_requires_verified_closure_and_all_principal() {
   let mut r=OrderReconciliationV2::default();
   r.apply(100,EVENT_FILL,60,70,0,false).unwrap();
