@@ -1,42 +1,54 @@
-# Vault V2 accounting and performance fees
+# Vault V2 accounting: trade-open participation and settlement waterfall
 
-## Required financial invariant
+## Product rules confirmed
 
-A depositor owns a **pro-rata share of the vault's net assets from their admission forward**, not historical trade PnL. Shares are minted at **post-crystallization NAV per share**. Deposits may never mint at liquid-USDC-only NAV when outstanding DFlow orders or positions carry historical profits or losses.
+1. Each vault independently defines a bot's performance-fee share; every vault reads the same protocol market registry.
+2. **At the moment a trade opens**, snapshot the eligible depositors and their pro-rata participation in that trade. A depositor who joins after that snapshot receives **no PnL from that already-open trade**, whether it wins or loses.
+3. The depositor becomes eligible for **new trades opened after their deposit has been accepted**. Participation is based on capital/shares effective at each new trade's opening, not the deposit time alone.
+4. For **each winning trade**, after authentic terminal settlement and reconciliation of cost basis, calculate the realized profit and transfer: **1% of trade profit to the protocol treasury**, the vault-configured bot share to that vault's authorized bot payout account, and the remaining profit to **that vault** for the participating depositors.
+5. Losing trades generate no protocol or bot performance fee. Their realized loss is borne by that trade's snapshotted participating capital pro rata.
+6. Fee payouts must only happen once per terminal trade and only in actual available settlement USDC. Pending/partially filled DFlow orders cannot trigger early profit payouts. Track refundable principal, realized loss and every payout separately.
+7. A bot assigned to more than one vault has no cross-vault accounting rights. Bot replacement must not redirect an earlier trade's earned fee without an explicit fee-beneficiary policy.
 
-A deposit received while any trade is open must either:
-1. Be rejected (current V2 behavior); or
-2. Be held separately as **pending capital** with zero trading entitlement, then admitted at the next fully settled epoch using that epoch's post-fee NAV. This queuing mechanism has **not** been implemented.
+## Fee order and example
 
-This restriction protects late entrants from receiving profits on already-open positions and protects earlier investors from dilution.
+Current V2 calculation defines the bot share as a percentage **of the profit remaining after** the 1% protocol fee:
 
-## Profit split
+- Winning trade profit = 100 USDC
+- Protocol fee = 1 USDC
+- Post-protocol profit = 99 USDC
+- Example configured bot share = 20% of 99 = 19.80 USDC
+- Depositor profit returned to the vault = 79.20 USDC
+- Trade principal is returned to the vault separately
 
-For **eligible realized net profit** after applying an appropriate per-share high-water mark / loss carryforward and after closing the relevant accounting interval:
+No fees are charged on trade principal. Rates must use integer atomic USDC and be frozen per trade at opening (or an expressly versioned alternative) so changing vault configuration while a trade is open cannot retroactively change a payout.
 
-1. Protocol fee: **1%** of eligible positive profit (100 basis points).
-2. Trader fee: each vault's admin-configured `trader_profit_share_bps` portion (0–10,000 bps) of **profit remaining after** the protocol fee.
-3. Depositors: **all remaining profit**, reflected in their vault-share NAV in proportion to shares held before that profit was earned.
+**The per-winning-trade fee model does not imply a high-water-mark or loss carryforward.** If those protections are wanted, they must be specified separately; otherwise a profitable trade following a loss still pays performance fees on that trade's own positive profit.
 
-Example: 100 USDC eligible profit, trader share 20% of post-protocol profit.
-- Protocol: 1 USDC.
-- Trader: 19.80 USDC.
-- Depositors: 79.20 USDC (distributed by existing vault shares / NAV).
-- Fee percentages are not charged against original depositor principal, and **no performance fees are assessed for zero or negative eligible PnL**.
+## Time-specific example
 
-Use integer atomic USDC math; floor fees and leave any rounding remainder in depositor NAV. Each vault has separate PnL, share supply, trader fee configuration and custody. The market registry remains global.
+- Alice deposits 100 USDC.
+- Trade #1 opens: participation snapshot contains Alice only.
+- Bob deposits 100 USDC while Trade #1 remains open.
+- Trade #1 settles +40 USDC gross profit: the protocol and bot receive their fees; Alice alone earns the remaining profit. Bob gets none of Trade #1's upside or downside.
+- Trade #2 opens after Bob's deposit: Alice and Bob participate pro rata based on their **actual eligible capital at Trade #2 opening**, which may differ after Trade #1 settlement.
 
-## Current implementation
+## Accounting model needed
 
-`accounting.rs` now offers deterministic fee split and NAV-priced share math with Rust tests. `VaultV2` stores `trader_profit_share_bps`, configurable via admin-only `set_vault_trader_fee_v2`. Protocol fee rate is a program constant, not adjustable per vault.
+Use trade-specific participation records / shares and locked cost basis (or a rigorously equivalent epoch/cohort accounting mechanism). Do **not** simply split trade PnL by depositor shares at settlement: a new depositor could receive a share of a position opened before their deposit.
 
-**Important: Fee crystallization, high-water mark accounting, fee payouts, realized position PnL tracking, and pending-deposit admission have not been wired into settlement.** The deposit and withdrawal handlers still reject while open exposure exists and use liquid-USDC math only under that restriction. They must not be enabled for live trading until closed-position accounting also guarantees post-fee NAV and captures realized losses.
+The custody and NAV model must prevent deposits made during open orders from implicitly buying an economic claim on those earlier orders. This requires separately tracking existing position receivables, unsettled exposures and post-entry capital, and supporting fee-inclusive NAV per cohort. Withdrawal requests also need to respect each depositor's commitments to open trades.
 
-## Required before mainnet funds
+Fundamental invariants:
+- Sum of each trade's depositor PnL allocations equals **realized trade PnL after protocol/bot fees** (positive or negative).
+- Protocol + bot + vault net profit = exactly the trade's positive realized profit (allowing for integer rounding dust held by vault).
+- No claim on an older trade is transferred to a newer depositor by depositing or withdrawing.
+- The registered bot is the trading signer; fee beneficiary is fixed/verifiable and cannot be replaced by arbitrary keeper-supplied account metas.
+- Settlement/payout is idempotent; fees cannot be double paid.
+- Fees are paid from **verified settlement proceeds**, never advance-funded from vault principal.
 
-- Track per-vault/per-position realized cost basis, terminal refunds, settlement proceeds and losses; no double-counting across partial fills.
-- Maintain an appropriate **per-share or cohort high-water mark / loss carryforward** so new subscribers do not inherit old investors' fee histories or obtain stale claims to pre-admission trades.
-- Crystallize terminal trade PnL and deduct accrued protocol/trader fees **before** pricing any newly admitted shares, withdrawals or new risk exposure.
-- Ensure trader fee recipients are authorized and canonical, never arbitrary keeper-supplied addresses; protocol treasury immutable/controlled by protocol governance.
-- Add invariants for a late depositor after both winning and losing epochs, depositor exit/re-entry, changed trader-fee configuration, repeated settlement, rounding dust, and multiple vaults with disjoint capital.
-- Fees on profits vs trade notional, and whether protocol/trader accrue on realized vs high-water-mark net profits, are specified here as **performance fees on eligible realized positive net PnL**. If product intent is a 1% fee on all traded principal, token amounts and economics need a different implementation and explicit approval.
+## Implementation state
+
+`programs/pactum-vault/src/accounting.rs` implements the fixed 1% protocol arithmetic and configurable bot share of remaining positive profit, **not** on-chain fee transfers or trade-specific entitlement snapshots. `VaultV2` stores `trader_profit_share_bps`, settable by admin via `set_vault_trader_fee_v2`.
+
+The current V2 deposit and withdrawal instructions **still reject while exposure/positions are open**; supporting Bob's mid-trade deposit with participation beginning at Trade #2 requires new cohort accounting and is not implemented yet. Live DFlow execution and performance-fee routing remain disabled until the snapshot and reconciliation logic are tested.
