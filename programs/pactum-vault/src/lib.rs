@@ -19,6 +19,7 @@ pub mod math;
 pub mod state;
 pub mod v2;
 pub mod trade_snapshots;
+pub mod trade_events;
 pub use trade_snapshots::{RegisterOrderV2,VerifyTradeParticipationV2};
 use trade_snapshots::{__client_accounts_register_order_v2,__client_accounts_verify_trade_participation_v2};
 pub use v2::{CreateVaultV2, ManageVaultV2, DepositVaultV2, WithdrawVaultV2, RequestPendingDepositV2, CancelPendingDepositV2, ActivatePendingDepositV2};
