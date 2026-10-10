@@ -20,12 +20,14 @@ pub struct VaultV2 {
     pub min_liquidity_buffer_usdc: u64,
     pub open_exposure_usdc: u64,
     pub total_shares: u64,
+    /// Monotonic share-ledger revision, advanced on every mint/burn.
+    pub share_revision: u64,
     pub open_positions: u64,
     /// Share of profit after the mandatory 1% protocol fee, in bps.
     pub trader_profit_share_bps: u16,
 }
 impl VaultV2 {
-    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 8 * 7 + 2;
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 8 * 8 + 2;
     pub fn require_keeper(&self, keeper: Pubkey) -> Result<()> {
         require!(self.keeper != Pubkey::default(), PactumError::UnauthorizedKeeper);
         require_keys_eq!(self.keeper, keeper, PactumError::UnauthorizedKeeper);
@@ -45,10 +47,12 @@ impl VaultV2 {
 pub struct VaultV2Position {
     pub owner: Pubkey,
     pub shares: u64,
+    /// Vault share-ledger revision at most recent share mutation.
+    pub share_revision: u64,
     pub pending_usdc: u64,
     pub bump: u8,
 }
-impl VaultV2Position { pub const LEN: usize = 32 + 8 + 8 + 1; }
+impl VaultV2Position { pub const LEN: usize = 32 + 8 + 8 + 8 + 1; }
 
 #[derive(Accounts)]
 #[instruction(vault_id: [u8; 32])]
@@ -195,6 +199,7 @@ pub fn request_pending_deposit(ctx: Context<RequestPendingDepositV2>, amount: u6
         p.owner=ctx.accounts.user.key();
         p.bump=ctx.bumps.position;
         p.shares=0;
+        p.share_revision=0;
         p.pending_usdc=0;
     }
     require_keys_eq!(p.owner,ctx.accounts.user.key(),PactumError::UnauthorizedAdmin);
@@ -239,6 +244,8 @@ pub fn activate_pending_deposit(ctx: Context<ActivatePendingDepositV2>) -> Resul
     ctx.accounts.position.shares=ctx.accounts.position.shares
         .checked_add(minted).ok_or(PactumError::MathOverflow)?;
     v.total_shares=v.total_shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
+    v.share_revision=v.share_revision.checked_add(1).ok_or(PactumError::MathOverflow)?;
+    ctx.accounts.position.share_revision=v.share_revision;
     let vault_key=v.key();
     let seeds:&[&[u8]]=&[b"vault_authority",vault_key.as_ref(),&[v.authority_bump]];
     token::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(),
@@ -266,6 +273,7 @@ pub fn create(ctx: Context<CreateVaultV2>, vault_id: [u8;32],
     v.min_liquidity_buffer_usdc=buffer;
     v.open_exposure_usdc=0;
     v.total_shares=0;
+    v.share_revision=0;
     v.open_positions=0;
     v.trader_profit_share_bps=0;
     Ok(())
@@ -297,7 +305,7 @@ pub fn deposit(ctx: Context<DepositVaultV2>, amount: u64) -> Result<()> {
     require!(v.open_exposure_usdc==0 && v.open_positions==0, PactumError::ExposureOpen);
     let minted=math::shares_for_deposit(amount,v.total_shares,ctx.accounts.vault_usdc.amount)?;
     let p=&mut ctx.accounts.position;
-    if p.owner==Pubkey::default() { p.owner=ctx.accounts.user.key(); p.bump=ctx.bumps.position; p.pending_usdc=0; }
+    if p.owner==Pubkey::default() { p.owner=ctx.accounts.user.key(); p.bump=ctx.bumps.position; p.pending_usdc=0; p.share_revision=0; }
     require_keys_eq!(p.owner,ctx.accounts.user.key(),PactumError::UnauthorizedAdmin);
     p.shares=p.shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
     v.total_shares=v.total_shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
@@ -317,6 +325,8 @@ pub fn withdraw(ctx: Context<WithdrawVaultV2>, shares: u64) -> Result<()> {
         PactumError::LiquidityBufferViolation);
     ctx.accounts.position.shares=ctx.accounts.position.shares.checked_sub(shares).ok_or(PactumError::MathOverflow)?;
     v.total_shares=v.total_shares.checked_sub(shares).ok_or(PactumError::MathOverflow)?;
+    v.share_revision=v.share_revision.checked_add(1).ok_or(PactumError::MathOverflow)?;
+    ctx.accounts.position.share_revision=v.share_revision;
     let vault_key=v.key();
     let seeds:&[&[u8]]=&[b"vault_authority",vault_key.as_ref(),&[v.authority_bump]];
     token::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(),
@@ -333,7 +343,7 @@ mod tests {
   VaultV2{vault_id:[id;32],admin:Pubkey::new_unique(),keeper,
    usdc_vault:Pubkey::new_unique(),pending_usdc_vault:Pubkey::new_unique(),pending_usdc_total:0,paused:false,authority_bump:255,config_bump:254,
    max_trade_usdc:max,max_total_exposure_usdc:max*2,min_liquidity_buffer_usdc:10,
-   open_exposure_usdc:0,total_shares:0,open_positions:0,trader_profit_share_bps:0}
+   open_exposure_usdc:0,total_shares:0,share_revision:0,open_positions:0,trader_profit_share_bps:0}
  }
  #[test] fn keeper_is_one_per_vault_and_revocation_is_immediate() {
   let bot=Pubkey::new_unique();
