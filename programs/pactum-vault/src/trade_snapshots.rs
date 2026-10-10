@@ -60,6 +60,8 @@ pub struct OpenTradeSnapshotV2<'info> {
     pub usdc_mint: Account<'info,Mint>,
     #[account(token::mint=usdc_mint, token::authority=keeper)]
     pub keeper_usdc: Account<'info,TokenAccount>,
+    #[account(address=vault.usdc_vault,token::mint=usdc_mint,token::authority=vault_authority)]
+    pub vault_usdc: Account<'info,TokenAccount>,
     /// CHECK: Instructions sysvar for atomic next-instruction verification.
     #[account(address=solana_instructions_sysvar::ID)]
     pub instructions_sysvar: UncheckedAccount<'info>,
