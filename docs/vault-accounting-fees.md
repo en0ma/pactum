@@ -1,3 +1,9 @@
+## Vault-scoped DFlow event identity and parent binding
+
+`observed_event_address(vault, transaction_signature, event_index)` now derives a deterministic PDA from the vault, both complete 32-byte halves of the 64-byte Solana transaction signature, and the event's index within that transaction. It distinguishes multiple fills in one transaction, collisions between vaults, and different transactions; no keeper-chosen nonce or truncated signature is involved. `validate_event_parent` checks that a candidate fill/refund record belongs to exactly the intended vault and registered parent order, with the expected event ID and compatible quantities. Regression tests cover identity uniqueness and mismatched parent records.
+
+These functions are **not on-chain evidence authentication**. The keeper must first obtain finalized DFlow program events, and an agreed on-chain verifier must prove provenance before a canonical event PDA can be initialized or cumulative amounts mutated. Never derive deposit PnL or fees merely from a transaction signature, user-supplied bytes or a keeper declaration. Live event writes are still disabled.
+
 ## Existing DFlow fixtures wired into V2 fill projection
 
 `project_decoded_order_fill` now connects the already-known DFlow `UserOrderEvent` order identity and USDC/outcome mint checks to `OrderReconciliationV2::apply`. It derives candidate cumulative filled USDC and credited outcome tokens, rejects cross-order identities and overfilled input, and does not mutate persistent accounts. Regression tests exercise a partial 60/100 fill and a second fill exceeding the original 100 USDC; an invalid proposal leaves the previous reconciliation untouched.
