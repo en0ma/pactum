@@ -139,6 +139,26 @@ pub fn observed_event_address(
     ).0
 }
 
+/// Convert the complete observed transaction identity into the 32-byte
+/// event ID stored by TradeEventV2. This prevents a keeper from choosing
+/// an unrelated ID for the same finalized (signature,event-index) pair.
+/// A PDA-derived ID is an identifier, never proof of transaction finality.
+pub fn observed_event_id(
+    vault:Pubkey, transaction_signature:[u8;64], event_index:u32,
+)->[u8;32] {
+    observed_event_address(vault,transaction_signature,event_index).to_bytes()
+}
+
+/// Bind a record's stored ID to a concrete transaction event and the parent
+/// order. The caller must separately authenticate the DFlow event itself.
+pub fn validate_observed_event_parent(
+    event:&TradeEventV2, expected_vault:Pubkey, expected_order:Pubkey,
+    transaction_signature:[u8;64], event_index:u32,
+)->Result<()> {
+    validate_event_parent(event,expected_vault,expected_order,
+        observed_event_id(expected_vault,transaction_signature,event_index))
+}
+
 /// Reject an event being bound to the wrong parent order or vault.
 /// Actual account creation, event provenance verification and value mutations
 /// must be atomic; this validator alone is never settlement authority.
@@ -377,6 +397,19 @@ mod tests {
   assert!(validate_event_parent(&event,vault,Pubkey::new_unique(),id).is_err());
   assert!(validate_event_parent(&event,Pubkey::new_unique(),order,id).is_err());
   assert!(validate_event_parent(&event,vault,order,[3u8;32]).is_err());
+ }
+ #[test] fn observed_event_binding_rejects_replays_with_altered_event_index() {
+  let vault=Pubkey::new_unique();let order=Pubkey::new_unique();
+  let signature=[21u8;64];
+  let id=observed_event_id(vault,signature,5);
+  let event=TradeEventV2{vault,order,event_id:id,kind:EVENT_REFUND,
+    input_usdc:0,outcome_atoms:0,refund_usdc:10,reconciled:false,bump:1};
+  assert!(validate_observed_event_parent(&event,vault,order,signature,5).is_ok());
+  assert!(validate_observed_event_parent(&event,vault,order,signature,6).is_err());
+  assert!(validate_observed_event_parent(&event,vault,Pubkey::new_unique(),signature,5).is_err());
+  let mut different=signature;different[40]=5;
+  assert!(validate_observed_event_parent(&event,vault,order,different,5).is_err());
+  assert_eq!(id,observed_event_id(vault,signature,5));
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
