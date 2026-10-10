@@ -1,3 +1,9 @@
+## Live V2 terminalization guard (no custody or fee settlement)
+
+`finalize_reconciled_order_v2` is now a public, permissionless instruction that reads the **actual registered DFlow order account** and verifies matching address, system ownership, zero lamports and empty data, before atomically marking an already fully reconciled V2 order terminal. The stored cumulative fill/refund ledger must account for the entire input and meet the order-opening slippage floor. The instruction accepts **no event amounts**, never creates a fill/refund event, and makes **no token or fee transfers**. It cannot finalize an ordinary newly registered order whose fills and refunds have not yet been authenticated and recorded: that pipeline remains unimplemented. A caller cannot use a different closed system account to pass the canonical-order check.
+
+The verification path relies on the existing V1 observed terminal account predicate. It is not an event receipt and cannot supply missing historical fill/refund data. Production settlement remains disabled until those events can be authenticated and recorded separately.
+
 ## Canonical DFlow terminal account verification
 
 The V1 observed terminal order predicate is system ownership, zero lamports, and empty data. `verify_canonical_dflow_order_closed` now additionally requires the supplied address to equal the registered order's immutable `order_account`, rejecting arbitrary closed accounts, open accounts, wrong owners and accounts with data. Regression tests cover these cases. Future V2 terminal handlers must read the real account's owner/lamports/data length and require this predicate before applying `project_terminal_order`.
