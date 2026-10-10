@@ -155,7 +155,7 @@ pub fn deposit(ctx: Context<DepositVaultV2>, amount: u64) -> Result<()> {
     require_keys_eq!(p.owner,ctx.accounts.user.key(),PactumError::UnauthorizedAdmin);
     p.shares=p.shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
     v.total_shares=v.total_shares.checked_add(minted).ok_or(PactumError::MathOverflow)?;
-    token::transfer_checked(CpiContext::new(ctx.accounts.token_program.to_account_info(),
+    token::transfer_checked(CpiContext::new(ctx.accounts.token_program.key(),
         TransferChecked{from:ctx.accounts.user_usdc.to_account_info(),
             mint:ctx.accounts.usdc_mint.to_account_info(),
             to:ctx.accounts.vault_usdc.to_account_info(),
@@ -173,7 +173,7 @@ pub fn withdraw(ctx: Context<WithdrawVaultV2>, shares: u64) -> Result<()> {
     v.total_shares=v.total_shares.checked_sub(shares).ok_or(PactumError::MathOverflow)?;
     let vault_key=v.key();
     let seeds:&[&[u8]]=&[b"vault_authority",vault_key.as_ref(),&[v.authority_bump]];
-    token::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(),
+    token::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(),
         TransferChecked{from:ctx.accounts.vault_usdc.to_account_info(),
             mint:ctx.accounts.usdc_mint.to_account_info(),
             to:ctx.accounts.user_usdc.to_account_info(),
