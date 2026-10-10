@@ -1,3 +1,7 @@
+## Finalized market-byte order-ID scan (10 October 2026)
+
+[CI #374](https://github.com/en0ma/pactum/actions/runs/38086009752) performed finalized RPC reads of the two surviving 568-byte DFlow-owned market ledgers and searched their **actual binary data** for the complete registered 32-byte order public key. Its uploaded `dflow-historical-state` artifact (11682317175) reports `orderPubkeyOffsetsInMarket: []` for both `partial-a` and `partial-b`. Their temporary order accounts remain absent. The scanner is in `scripts/inspect-dflow-persistent-state.mjs`; tests confirm exact byte matching. This result means **no literal order public-key references appear in those market-account data bytes at the current finalized state**. It does not rule out a separate receipt PDA, hashed/indirect mappings, or an account structure that never records individual orders. It is not proof of cumulative fill/refund amounts and does not authorize any on-chain accounting write.
+
 ## Live Solana RPC evidence — recovered June order/market state (10 October 2026)
 
 CI [run #370](https://github.com/en0ma/pactum/actions/runs/38085657327), artifact `dflow-historical-state` (11682356610), **actually executed** read-only finalized-commitment `getAccountInfo` RPC calls for both cases pinned in `tests/fixtures/dflow-june-partial-fill-cases.json`:
