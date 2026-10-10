@@ -8,7 +8,7 @@ function validate(x){
  if(x.open<=0||x.fill<=0||x.outcome<=0)throw Error("Invalid partial fill");
  if(x.fill>=x.open)throw Error("Not a partial fill");
  if(x.refundDelta!==x.open-x.fill)throw Error("Refund/principal mismatch");
- if(x.refundOwnerMatchesOpen!==true||x.refundSourceMatchesOpen!==true)
+ if(x.openRefundRecipient!==x.actualRefundOwner||x.openSourceUsdc!==x.actualRefundAccount)
    throw Error("Refund is not attributed to the registered open's refund identity/source");
  return true;
 }
@@ -20,8 +20,8 @@ test("recovered June mainnet partial fills reconcile observed original principal
 test("rejects spoofed custody destination, wrong refund and made-up full fill",()=>{
  const x=fixture.cases[0];
  assert.throws(()=>validate({...x,refundDelta:x.refundDelta+1}),/mismatch/);
- assert.throws(()=>validate({...x,refundOwnerMatchesOpen:false}),/attributed/);
- assert.throws(()=>validate({...x,refundSourceMatchesOpen:false}),/attributed/);
+ assert.throws(()=>validate({...x,actualRefundOwner:"different-owner"}),/attributed/);
+ assert.throws(()=>validate({...x,actualRefundAccount:"different-token-account"}),/attributed/);
  assert.throws(()=>validate({...x,fill:x.open}),/partial/);
  assert.throws(()=>validate({...x,fill:x.open+1}),/partial/);
 });
