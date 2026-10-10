@@ -1,3 +1,11 @@
+## Order registry and trade event registry — revised vault-scoped identity
+
+The canonical V2 entrypoint is now `register_order_v2` (replacing `open_trade_snapshot_v2`). The **order record** is initialized at `[b"v2_order", vault_pubkey, order_id]`, so each order ID is unique *within its vault*, not across the entire protocol. The record stores DFlow order account, approved market, YES/NO side, input USDC, quoted output, slippage, bot identity, status and the trade-opening share/fee snapshot. As before, it atomically verifies the immediately subsequent final DFlow OpenUserOrder. On-chain initialization rejects reuse of the same vault/order ID.
+
+A distinct `TradeEventV2` type models individual fill/refund events at `[b"v2_trade", vault_pubkey, event_id]`. An order may produce multiple fill/refund events, each with its own trade-event ID; the same ID may be used independently by different vaults. The event schema and integer-only validators exist with Rust tests, but **public event writes are intentionally absent** until DFlow receipts and custody deltas can be authenticated. In particular, a bot-supplied event ID or claimed refund cannot trigger payouts.
+
+The pre-existing historical share-checkpoint proofs now read the parent `OrderRecordV2` opening revision. Legacy V1 instructions remain unchanged. No production DFlow funding, fill/refund reconciliation, depositor PnL settlement, or fee transfer is enabled by this refactor.
+
 ## Atomic DFlow-opening binding (new)
 
 `open_trade_snapshot_v2` now requires the immediately following instruction to be the **final** top-level DFlow PredictionMarkets OpenUserOrder instruction in that same Solana transaction. It checks the vault's sole keeper signer and vault-specific risk limits, the shared market registry, DFlow account layout and PDA fill/refund recipients, the observed order data, and requires `trade_id` to equal the DFlow order-account public key bytes. The trade-open share revision and bot fee rate are captured at the validated opening point.
