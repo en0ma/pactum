@@ -262,6 +262,19 @@ pub fn project_terminal_order(
     Ok(next)
 }
 
+/// Validate the V1-observed terminal DFlow order-account state using the
+/// canonical registered order pubkey. A random closed system account does
+/// not suffice: caller must supply the actual OrderRecordV2.order_account.
+pub fn verify_canonical_dflow_order_closed(
+    expected_order:Pubkey, supplied_order:Pubkey,
+    owner:Pubkey, lamports:u64, data_len:usize,
+)->Result<()> {
+    require_keys_eq!(supplied_order,expected_order,PactumError::InvalidDflowAccounts);
+    require_keys_eq!(owner,anchor_lang::system_program::ID,PactumError::DflowOrderNotTerminal);
+    require!(lamports==0 && data_len==0,PactumError::DflowOrderNotTerminal);
+    Ok(())
+}
+
 /// Terminal evidence as differences from order-opening custody snapshots.
 /// Exclusive attribution to this order must be established elsewhere.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -461,6 +474,14 @@ mod tests {
   assert!(closed.terminal);
   assert_eq!(closed.outcome_atoms,0);
   assert_eq!(closed.filled_usdc,0);
+ }
+ #[test] fn canonical_terminal_account_must_be_the_registered_closed_order() {
+  let order=Pubkey::new_unique();let system=anchor_lang::system_program::ID;
+  assert!(verify_canonical_dflow_order_closed(order,order,system,0,0).is_ok());
+  assert!(verify_canonical_dflow_order_closed(order,Pubkey::new_unique(),system,0,0).is_err());
+  assert!(verify_canonical_dflow_order_closed(order,order,Pubkey::new_unique(),0,0).is_err());
+  assert!(verify_canonical_dflow_order_closed(order,order,system,1,0).is_err());
+  assert!(verify_canonical_dflow_order_closed(order,order,system,0,1).is_err());
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
