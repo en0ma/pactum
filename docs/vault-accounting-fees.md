@@ -1,3 +1,11 @@
+## Existing DFlow fixtures wired into V2 fill projection
+
+`project_decoded_order_fill` now connects the already-known DFlow `UserOrderEvent` order identity and USDC/outcome mint checks to `OrderReconciliationV2::apply`. It derives candidate cumulative filled USDC and credited outcome tokens, rejects cross-order identities and overfilled input, and does not mutate persistent accounts. Regression tests exercise a partial 60/100 fill and a second fill exceeding the original 100 USDC; an invalid proposal leaves the previous reconciliation untouched.
+
+The existing V1 confirmed redemption instruction fixture is tested through `validate_observed_redeem_instruction`. Its encoded **instruction data** is exactly 8 bytes (action `0x58`) and therefore contains no 32-byte purchase order ID. This is **not** a conclusion about the separate `UserRedeemEvent` body or the transaction's remaining accounts and logs, which still require inspection of actual confirmed transactions.
+
+These tests reuse existing DFlow instruction parsing, but the projected fill event is still passed as decoded data from an external observer. **No on-chain instruction can currently accept it as a historical proof; no event ledger writes or PnL/fee payments are authorized.** Separate fill/refund identity, event-specific evidence verification and market redemption attribution remain necessary.
+
 ## DFlow UserOrderEvent semantic validation — IDL adapter
 
 The official DFlow parsing guide confirms semantic fields `userOrder`, `inputMint`, `inputAmount`, `outputMint`, `outputAmount`, `feeMint`, and `feeAmount` for order events. `DecodedUserOrderEvent` and `validate_decoded_order_fill` now reject fills with mismatched parent order or input/output/fee mint, invalid lifecycle kind, or zero fill quantities. Tests also establish why event identity must include the event's intra-transaction position: one transaction can contain more than one emitted event.
