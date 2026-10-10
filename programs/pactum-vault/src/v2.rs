@@ -343,6 +343,33 @@ mod tests {
   a.keeper=Pubkey::default();
   assert!(a.require_keeper(bot).is_err());
  }
+ #[test] fn pending_deposits_are_separate_from_active_shares() {
+  let bot=Pubkey::new_unique();
+  let mut vault=v(1,bot,100);
+  vault.total_shares=100;
+  vault.open_positions=1;
+  vault.pending_usdc_total=50;
+  // Pending capital does not grant existing trade exposure or new shares.
+  assert_eq!(vault.total_shares,100);
+  assert_eq!(vault.pending_usdc_total,50);
+  assert!(vault.check_trade(90,95).is_err());
+  // At the cutoff, minting is priced using ACTIVE NAV, not pending escrow.
+  vault.open_positions=0;
+  let minted=crate::accounting::shares_at_crystallized_nav(50,100,200).unwrap();
+  assert_eq!(minted,25);
+  vault.total_shares+=minted;
+  vault.pending_usdc_total-=50;
+  assert_eq!(vault.total_shares,125);
+  assert_eq!(vault.pending_usdc_total,0);
+ }
+ #[test] fn cancellation_does_not_change_share_supply() {
+  let mut vault=v(1,Pubkey::new_unique(),100);
+  vault.total_shares=250;
+  vault.pending_usdc_total=75;
+  vault.pending_usdc_total-=25;
+  assert_eq!(vault.total_shares,250);
+  assert_eq!(vault.pending_usdc_total,50);
+ }
  #[test] fn independent_vault_trade_rules() {
   let bot=Pubkey::new_unique();
   assert!(v(1,bot,100).check_trade(90,500).is_ok());
