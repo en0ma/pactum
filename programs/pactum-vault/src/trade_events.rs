@@ -305,6 +305,23 @@ pub fn verify_reconciliation_transition(
     Ok(())
 }
 
+/// Directly inspect an *existing* DFlow-owned order account. This does
+/// not decode undocumented fill/refund offsets: it only establishes canonical
+/// account identity, program ownership and the observed account size.
+/// A zero-lamport closed account uses the separate terminal validator.
+pub fn verify_live_dflow_order_account(
+    expected_order:Pubkey, supplied_order:Pubkey,
+    owner:Pubkey, lamports:u64, data_len:usize,
+)->Result<()> {
+    require_keys_eq!(expected_order,supplied_order,PactumError::InvalidDflowAccounts);
+    require_keys_eq!(owner,crate::dflow::DFLOW_PREDICTION_MARKETS,
+        PactumError::InvalidDflowAccounts);
+    require!(lamports>0,PactumError::InvalidDflowAccounts);
+    require!(data_len==crate::dflow::prediction_v1::OBSERVED_USER_ORDER_ACCOUNT_LEN,
+        PactumError::InvalidDflowFixture);
+    Ok(())
+}
+
 /// Terminal evidence as differences from order-opening custody snapshots.
 /// Exclusive attribution to this order must be established elsewhere.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -527,6 +544,15 @@ mod tests {
   let mut forged=after;forged.outcome_atoms=1000;
   assert!(verify(true,vault,order,before,forged).is_err());
   assert!(verify(true,vault,order,before,after).is_ok());
+ }
+ #[test] fn live_dflow_order_must_be_canonical_owned_and_correct_size() {
+  let order=Pubkey::new_unique();let owner=crate::dflow::DFLOW_PREDICTION_MARKETS;
+  let len=crate::dflow::prediction_v1::OBSERVED_USER_ORDER_ACCOUNT_LEN;
+  assert!(verify_live_dflow_order_account(order,order,owner,1,len).is_ok());
+  assert!(verify_live_dflow_order_account(order,Pubkey::new_unique(),owner,1,len).is_err());
+  assert!(verify_live_dflow_order_account(order,order,Pubkey::new_unique(),1,len).is_err());
+  assert!(verify_live_dflow_order_account(order,order,owner,0,len).is_err());
+  assert!(verify_live_dflow_order_account(order,order,owner,1,len-1).is_err());
  }
  #[test] fn event_namespace_is_vault_specific() {
   let a=Pubkey::new_unique();let b=Pubkey::new_unique();let id=[44;32];
