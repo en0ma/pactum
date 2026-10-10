@@ -7,8 +7,10 @@
       "fill": 221098384,
       "outcome": 481000000,
       "refundDelta": 4882091,
-      "refundOwnerMatchesOpen": true,
-      "refundSourceMatchesOpen": true
+      "openRefundRecipient": "5htjTcCNaM6juCAJeXsPezyDjZdwQUrgVuFCxaLV9UJm",
+      "actualRefundOwner": "5htjTcCNaM6juCAJeXsPezyDjZdwQUrgVuFCxaLV9UJm",
+      "openSourceUsdc": "H5pNEYYej7UDKYGSrGgUQ9BNEmA1Wr6CsTf6rc8SGqjH",
+      "actualRefundAccount": "H5pNEYYej7UDKYGSrGgUQ9BNEmA1Wr6CsTf6rc8SGqjH"
     },
     {
       "label": "partial-b",
@@ -16,8 +18,10 @@
       "fill": 9294288,
       "outcome": 12000000,
       "refundDelta": 7600,
-      "refundOwnerMatchesOpen": true,
-      "refundSourceMatchesOpen": true
+      "openRefundRecipient": "3ALQUAWHJJSBFqZGkzncTuFv7TLi2aYhJ84PW3VGDV9G",
+      "actualRefundOwner": "3ALQUAWHJJSBFqZGkzncTuFv7TLi2aYhJ84PW3VGDV9G",
+      "openSourceUsdc": "3ZWDWPsnYHZJQZMGh7Hvr4CTBn3LFH45zMfoL7tJAn9P",
+      "actualRefundAccount": "3ZWDWPsnYHZJQZMGh7Hvr4CTBn3LFH45zMfoL7tJAn9P"
     }
   ]
 }
