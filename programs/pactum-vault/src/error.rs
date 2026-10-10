@@ -14,6 +14,8 @@ pub enum PactumError {
     ZeroShares,
     #[msg("Not enough shares")]
     InsufficientShares,
+    #[msg("Insufficient pending deposit amount")]
+    InsufficientPendingDeposit,
     #[msg("Withdrawal would violate the configured liquidity buffer")]
     LiquidityBufferViolation,
     #[msg("The initial vault balance must be zero")]
