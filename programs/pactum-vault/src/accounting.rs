@@ -1,9 +1,9 @@
 //! Deterministic, integer-only profit and fee allocation primitives.
 //!
 //! These functions do not transfer tokens or establish when a PnL event becomes
-//! final. The vault must crystallize all prior PnL **before** admitting deposits
-//! into a new accounting epoch, and must not include post-entry deposits in
-//! the denominator for profits earned by earlier positions.
+//! final. New capital must not receive PnL from trades opened before its deposit.
+//! Snapshot per-trade entitlement and price deposits against an audited NAV,
+//! including outstanding positions, before enabling mid-trade deposits.
 use anchor_lang::prelude::*;
 use crate::error::PactumError;
 
@@ -58,9 +58,49 @@ pub fn shares_at_crystallized_nav(deposit: u64, shares_before: u64, nav_before: 
     u64::try_from(shares).map_err(|_| error!(PactumError::MathOverflow))
 }
 
+/// Immutable entitlement boundary captured when a trade opens.
+/// Account ownership history must be checkpointed independently per depositor:
+/// `shares_at_open` cannot be derived from live balance after a new deposit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TradeParticipationSnapshot {
+    pub shares_at_open: u64,
+    pub trader_fee_bps_at_open: u16,
+}
+/// Signed PnL attributed only to the shares existing at trade opening.
+/// Rounding dust remains with the vault and cannot be paid to new entrants.
+pub fn pnl_for_trade_open_shares(
+    realized_depositor_pnl: i128,
+    owner_shares_at_open: u64,
+    total_shares_at_open: u64,
+) -> Result<i128> {
+    require!(total_shares_at_open > 0, PactumError::MathOverflow);
+    require!(owner_shares_at_open <= total_shares_at_open, PactumError::InvalidMarketExposure);
+    realized_depositor_pnl
+        .checked_mul(i128::from(owner_shares_at_open))
+        .ok_or(PactumError::MathOverflow)?
+        .checked_div(i128::from(total_shares_at_open))
+        .ok_or_else(|| error!(PactumError::MathOverflow))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mid_trade_deposit_does_not_inherit_old_win_or_loss() {
+        // Alice owned 100/100 shares when trade #1 opened.
+        // Bob deposits later, creating 100 more active shares.
+        // Bob's shares_at_open for trade #1 is zero, regardless of settlement time.
+        assert_eq!(pnl_for_trade_open_shares(79_200_000,100,100).unwrap(),79_200_000);
+        assert_eq!(pnl_for_trade_open_shares(79_200_000,0,100).unwrap(),0);
+        assert_eq!(pnl_for_trade_open_shares(-50_000_000,0,100).unwrap(),0);
+        // Trade #2 opens after Bob enters: both get 50% for this example.
+        assert_eq!(pnl_for_trade_open_shares(100_000_000,100,200).unwrap(),50_000_000);
+    }
+    #[test]
+    fn rejects_shares_larger_than_trade_open_supply() {
+        assert!(pnl_for_trade_open_shares(10,101,100).is_err());
+        assert!(pnl_for_trade_open_shares(10,0,0).is_err());
+    }
     #[test]
     fn fee_priority_and_rounding() {
         let x=split_eligible_profit(1_000_000, 2_000).unwrap();
