@@ -1,3 +1,9 @@
+## Separate terminal closure after fill/refund events
+
+`project_terminal_order` now closes a fully reconciled order **without inventing an extra fill event**. It requires externally proven closure of the matching DFlow order account, all original USDC consumed or refunded, and a minimum total received outcome amount for the actual consumed USDC after applying the registered quote/slippage. A fully refunded order can close with zero outcome atoms. Duplicate terminal transitions fail; tests cover unclosed/partial input, underfill, refunds and duplicate closure.
+
+This is a pure checked projection. The `dflow_order_closed` argument is NOT independently verified by this function; a future on-chain caller must validate the canonical DFlow-owned order state or another authenticated closure source. No on-chain event ingestion or payout is exposed.
+
 ## Canonical event ID binding
 
 `observed_event_id(vault,signature,event_index)` translates the full 64-byte Solana transaction signature, event index and vault into the fixed 32-byte event ID used by `TradeEventV2`. `validate_observed_event_parent` now rejects a record if its vault, parent order or event ID differs from the canonical identity for that exact observed transaction event. Tests reject altered signatures and event positions. This closes a model-level gap where a 32-byte event ID could otherwise be chosen independently of the transaction-reference tuple.
