@@ -2,7 +2,7 @@
 //! No keeper funding or DFlow execution is authorized by this module.
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
-use crate::{dflow, error::PactumError, math};
+use crate::{dflow, error::PactumError, math, state::VaultConfig};
 
 #[account]
 pub struct VaultV2 {
@@ -49,6 +49,10 @@ impl VaultV2Position { pub const LEN: usize = 32 + 8 + 1; }
 #[instruction(vault_id: [u8; 32])]
 pub struct CreateVaultV2<'info> {
     #[account(mut)] pub admin: Signer<'info>,
+    // During v1→v2 migration the existing protocol config anchors authority.
+    // Arbitrary wallets must not create public vaults.
+    #[account(seeds=[b"config"], bump=protocol_config.config_bump, has_one=admin)]
+    pub protocol_config: Account<'info, VaultConfig>,
     #[account(init, payer=admin, space=8+VaultV2::LEN,
         seeds=[b"vault", vault_id.as_ref()], bump)]
     pub vault: Account<'info, VaultV2>,
