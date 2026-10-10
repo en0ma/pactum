@@ -1,3 +1,9 @@
+## Read-only historical participation proof
+
+`verify_trade_participation_v2` verifies an individual depositor's historical active share balance against a specific vault's trade-opening revision. Optional consecutive before/after checkpoints must match their canonical vault-position and mutation-index PDAs. The verifier rejects skipped indices, revision gaps, cross-vault/depositor mismatches, and amounts exceeding the trade's opening share supply. A late entrant with a first checkpoint after opening receives zero historical shares. This verifier is **read-only** and logs eligible shares; it does not create an entitlement, distribute PnL, fund DFlow, or pay fees.
+
+Important: the trade snapshot itself is currently keeper-created independently of a real verified DFlow order. Historical participation proof alone **cannot** make PnL disbursement safe. Production settlement must atomically bind trade-open records to actual DFlow order execution and cost basis, enforce exactly-once settlement, and use correct cohort-aware NAV before enabling mid-trade active deposits. Pending escrow remains available during this migration.
+
 ## Append-only share history (in progress)
 
 V2 share-changing instructions now atomically initialize an immutable `ShareCheckpointV2` PDA for each depositor, keyed by the depositor's position PDA and monotonic `share_mutations` index. It records the post-operation share balance and vault-wide revision. Deposit, withdrawal and pending activation paths each append a checkpoint. This makes the historical share timeline verifiable even if a depositor's share balance later returns to an earlier value.
