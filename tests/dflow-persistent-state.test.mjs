@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {Keypair,PublicKey} from "@solana/web3.js";
-import {inspectDflowState,DFLOW_PROGRAM} from "../scripts/inspect-dflow-persistent-state.mjs";
+import {inspectDflowState,findOrderPubkeyOffsets,DFLOW_PROGRAM} from "../scripts/inspect-dflow-persistent-state.mjs";
 const order=Keypair.generate().publicKey.toBase58();
 const market=Keypair.generate().publicKey.toBase58();
 function rpc({liveOrder=false,marketOwner=DFLOW_PROGRAM}={}) {
@@ -43,4 +43,13 @@ test("archived June orders retain distinct actual DFlow market mappings",()=>{
   assert.notEqual(example.marketLedger,example.marketUsdcAccount);
  }
  assert.notEqual(data.cases[0].marketLedger,data.cases[1].marketLedger);
+});
+
+test("searches only exact order identity bytes in surviving market state",()=>{
+ const data=Buffer.alloc(568);
+ const needle=new PublicKey(order).toBuffer();
+ needle.copy(data,41);
+ needle.copy(data,342);
+ assert.deepEqual(findOrderPubkeyOffsets(data,order),[41,342]);
+ assert.deepEqual(findOrderPubkeyOffsets(data,Keypair.generate().publicKey.toBase58()),[]);
 });
