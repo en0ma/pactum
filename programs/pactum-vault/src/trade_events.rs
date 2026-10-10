@@ -188,6 +188,15 @@ pub fn validate_event_record(
     }
     Ok(())
 }
+/// Verify that a balance-derived refund cannot exceed the registered input.
+/// This is a necessary arithmetic boundary, not sufficient proof of which
+/// transaction credited a shared token account.
+pub fn checked_terminal_refund(original_input:u64, observed_refund:u64)->Result<u64> {
+    require!(original_input>0,PactumError::ZeroAmount);
+    require!(observed_refund<=original_input,PactumError::InvalidDflowRefund);
+    original_input.checked_sub(observed_refund).ok_or_else(||error!(PactumError::MathOverflow))
+}
+
 /// Cumulative execution totals for one order. These are accounting state,
 /// not authority to mint a trade event from unverified bot assertions.
 #[derive(AnchorSerialize,AnchorDeserialize,Clone,Copy,Debug,Default,PartialEq,Eq)]
@@ -500,6 +509,13 @@ mod tests {
   let mut different=signature;different[40]=5;
   assert!(validate_observed_event_parent(&event,vault,order,different,5).is_err());
   assert_eq!(id,observed_event_id(vault,signature,5));
+ }
+ #[test] fn terminal_refunds_reject_excess_custody_credit() {
+  assert_eq!(checked_terminal_refund(225_980_475,4_882_091).unwrap(),221_098_384);
+  assert_eq!(checked_terminal_refund(9_301_888,7_600).unwrap(),9_294_288);
+  assert_eq!(checked_terminal_refund(100,100).unwrap(),0);
+  assert!(checked_terminal_refund(100,101).is_err());
+  assert!(checked_terminal_refund(0,0).is_err());
  }
  #[test] fn archived_mainnet_partial_fills_match_pactum_ledger_rules() {
   // GitHub Actions #207 artifact 11532353903, two observed June cases.
