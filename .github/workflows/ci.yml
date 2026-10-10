@@ -110,6 +110,20 @@ jobs:
             exit 1
           fi
 
+  dflow-wrapper-rust:
+    if: ${{ github.event_name == 'pull_request' }}
+    name: DFlow on-chain read-only guard compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: Check vault program
+        run: cargo check -p pactum-vault --lib
+
   dflow-sdk-offline:
     if: ${{ github.event_name == 'pull_request' }}
     name: DFlow offline SDK composition tests
