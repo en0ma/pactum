@@ -265,6 +265,83 @@ pub mod pactum_vault {
         Ok(())
     }
 
+    /// Read-only validation for an atomically composed keeper + DFlow transaction.
+    /// Does not transfer, delegate, sign, or approve any vault funds.
+    ///
+    /// Only the immediately following top-level instruction is accepted.
+    /// This is a migration gate, not yet a production funding mechanism.
+    pub fn verify_dflow_wrapper(
+        ctx: Context<VerifyDflowWrapper>,
+        input_amount: u64,
+        quoted_outcome_atoms: u64,
+        slippage_bps: u16,
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, PactumError::VaultPaused);
+        let now = Clock::get()?.unix_timestamp;
+        let registry = &ctx.accounts.market_registry;
+        require!(
+            registry.sequence > 0
+                && registry.current.start_ts <= now
+                && now < registry.current.end_ts,
+            PactumError::MarketRegistryStale
+        );
+        let approved = &ctx.accounts.approved_market;
+        require!(approved.enabled, PactumError::MarketDisabled);
+        require_keys_eq!(registry.current.market_ledger, approved.market_ledger, PactumError::MarketRegistryMismatch);
+        require_keys_eq!(registry.current.settlement_vault, approved.settlement_vault, PactumError::MarketRegistryMismatch);
+        require_keys_eq!(registry.current.yes_mint, approved.yes_mint, PactumError::MarketRegistryMismatch);
+        require_keys_eq!(registry.current.no_mint, approved.no_mint, PactumError::MarketRegistryMismatch);
+        math::validate_trade_amount(input_amount, ctx.accounts.config.open_exposure_usdc,
+            ctx.accounts.config.max_trade_usdc, ctx.accounts.config.max_total_exposure_usdc)?;
+        require!(
+            ctx.accounts.vault_usdc.amount.checked_sub(input_amount)
+                .ok_or(PactumError::MathOverflow)?
+                >= ctx.accounts.config.min_liquidity_buffer_usdc,
+            PactumError::LiquidityBufferViolation
+        );
+        let current_ix = anchor_lang::solana_program::sysvar::instructions::load_current_index_checked(
+            &ctx.accounts.instructions_sysvar.to_account_info()
+        )?;
+        let next_index = current_ix.checked_add(1).ok_or(PactumError::MathOverflow)?;
+        let next = anchor_lang::solana_program::sysvar::instructions::load_instruction_at_checked(
+            usize::from(next_index),
+            &ctx.accounts.instructions_sysvar.to_account_info()
+        ).map_err(|_| error!(PactumError::InvalidDflowAccounts))?;
+        require_keys_eq!(next.program_id, dflow::DFLOW_PREDICTION_MARKETS, PactumError::InvalidDflowAccounts);
+        require!(next.accounts.len() == 12, PactumError::InvalidDflowAccounts);
+        let expected = [
+            ctx.accounts.dflow_program.key(),
+            ctx.accounts.event_authority.key(),
+            ctx.accounts.market_ledger.key(),
+            ctx.accounts.market_usdc_account.key(),
+            ctx.accounts.order_account.key(),
+            ctx.accounts.usdc_mint.key(),
+            ctx.accounts.keeper_usdc.key(),
+            ctx.accounts.keeper.key(),
+            ctx.accounts.vault_authority.key(),
+            ctx.accounts.vault_authority.key(),
+            ctx.accounts.token_program.key(),
+            ctx.accounts.system_program.key(),
+        ];
+        for (meta, want) in next.accounts.iter().zip(expected.iter()) {
+            require_keys_eq!(meta.pubkey, *want, PactumError::InvalidDflowAccounts);
+        }
+        // The bot is the only DFlow authority signer in the observed OpenUserOrder
+        // shape. The PDA custody recipients are not top-level signers.
+        require!(next.accounts[7].is_signer, PactumError::InvalidDflowAccounts);
+        require!(!next.accounts[8].is_signer && !next.accounts[9].is_signer,
+            PactumError::InvalidDflowAccounts);
+        require!(!next.accounts[6].is_signer, PactumError::InvalidDflowAccounts);
+        let side = dflow::prediction_v1::OutcomeSide::from_mint(
+            approved, ctx.accounts.outcome_mint.key()
+        )?;
+        dflow::prediction_v1::validate_open_order_data(
+            &next.data, side, input_amount, quoted_outcome_atoms, slippage_bps
+        )?;
+        // Read-only. This cannot certify spending, refund or asynchronous fill.
+        Ok(())
+    }
+
     pub fn authorize_keeper(ctx: Context<AuthorizeKeeper>) -> Result<()> {
         let authorization = &mut ctx.accounts.keeper_authorization;
         authorization.keeper = ctx.accounts.keeper.key();
@@ -1526,6 +1603,60 @@ pub struct UpdateMarketRegistry<'info> {
     )]
     pub current_approved_market: Box<Account<'info, ApprovedMarket>>,
 
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct VerifyDflowWrapper<'info> {
+    pub keeper: Signer<'info>,
+    #[account(seeds = [b"config"], bump = config.config_bump)]
+    pub config: Box<Account<'info, VaultConfig>>,
+    #[account(
+        seeds = [b"keeper", config.key().as_ref(), keeper.key().as_ref()],
+        bump = keeper_authorization.bump,
+        constraint = keeper_authorization.keeper == keeper.key()
+    )]
+    pub keeper_authorization: Box<Account<'info, KeeperAuthorization>>,
+    #[account(seeds = [b"market_registry"], bump = market_registry.bump)]
+    pub market_registry: Box<Account<'info, MarketRegistry>>,
+    #[account(
+        seeds = [b"market", approved_market.market_ledger.as_ref()],
+        bump = approved_market.bump
+    )]
+    pub approved_market: Box<Account<'info, ApprovedMarket>>,
+    /// CHECK: Fixed approved DFlow market ledger.
+    #[account(address = approved_market.market_ledger,
+        constraint = *market_ledger.owner == dflow::DFLOW_PREDICTION_MARKETS)]
+    pub market_ledger: UncheckedAccount<'info>,
+    #[account(address = approved_market.settlement_vault,
+        token::mint = usdc_mint, token::authority = market_ledger)]
+    pub market_usdc_account: Box<Account<'info, TokenAccount>>,
+    /// CHECK: DFlow order account identity is compared against the next instruction.
+    pub order_account: UncheckedAccount<'info>,
+    #[account(seeds = [b"vault_authority"], bump = config.vault_authority_bump)]
+    /// CHECK: PDA used solely for recipient identity validation.
+    pub vault_authority: UncheckedAccount<'info>,
+    #[account(address = dflow::USDC_MINT)]
+    pub usdc_mint: Box<Account<'info, Mint>>,
+    #[account(address = config.usdc_vault, token::mint = usdc_mint,
+        token::authority = vault_authority)]
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    /// CHECK: Keeper funding account must be controlled by the keeper.
+    #[account(token::mint = usdc_mint, token::authority = keeper)]
+    pub keeper_usdc: Box<Account<'info, TokenAccount>>,
+    #[account(constraint = outcome_mint.key() == approved_market.yes_mint ||
+        outcome_mint.key() == approved_market.no_mint)]
+    pub outcome_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
+    /// CHECK: Fixed DFlow program.
+    #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
+    pub dflow_program: UncheckedAccount<'info>,
+    /// CHECK: Fixed DFlow event authority.
+    #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
+    pub event_authority: UncheckedAccount<'info>,
+    /// CHECK: Solana instructions sysvar; sysvar address checked explicitly.
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub instructions_sysvar: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
