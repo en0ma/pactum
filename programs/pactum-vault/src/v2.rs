@@ -19,9 +19,11 @@ pub struct VaultV2 {
     pub open_exposure_usdc: u64,
     pub total_shares: u64,
     pub open_positions: u64,
+    /// Share of profit after the mandatory 1% protocol fee, in bps.
+    pub trader_profit_share_bps: u16,
 }
 impl VaultV2 {
-    pub const LEN: usize = 32 + 32 + 32 + 32 + 1 + 1 + 1 + 8 * 6;
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 1 + 1 + 1 + 8 * 6 + 2;
     pub fn require_keeper(&self, keeper: Pubkey) -> Result<()> {
         require!(self.keeper != Pubkey::default(), PactumError::UnauthorizedKeeper);
         require_keys_eq!(self.keeper, keeper, PactumError::UnauthorizedKeeper);
@@ -128,6 +130,7 @@ pub fn create(ctx: Context<CreateVaultV2>, vault_id: [u8;32],
     v.open_exposure_usdc=0;
     v.total_shares=0;
     v.open_positions=0;
+    v.trader_profit_share_bps=0;
     Ok(())
 }
 pub fn set_keeper(ctx: Context<ManageVaultV2>, keeper: Pubkey) -> Result<()> {
@@ -144,6 +147,12 @@ pub fn set_rules(ctx: Context<ManageVaultV2>,
     v.max_total_exposure_usdc=max_exposure;
     v.min_liquidity_buffer_usdc=buffer;
     v.paused=paused;
+    Ok(())
+}
+pub fn set_trader_profit_share(ctx: Context<ManageVaultV2>, trader_share_bps: u16) -> Result<()> {
+    require!(u64::from(trader_share_bps) <= crate::accounting::FEE_BPS,
+        PactumError::InvalidRiskLimits);
+    ctx.accounts.vault.trader_profit_share_bps = trader_share_bps;
     Ok(())
 }
 pub fn deposit(ctx: Context<DepositVaultV2>, amount: u64) -> Result<()> {
@@ -187,7 +196,7 @@ mod tests {
   VaultV2{vault_id:[id;32],admin:Pubkey::new_unique(),keeper,
    usdc_vault:Pubkey::new_unique(),paused:false,authority_bump:255,config_bump:254,
    max_trade_usdc:max,max_total_exposure_usdc:max*2,min_liquidity_buffer_usdc:10,
-   open_exposure_usdc:0,total_shares:0,open_positions:0}
+   open_exposure_usdc:0,total_shares:0,open_positions:0,trader_profit_share_bps:0}
  }
  #[test] fn keeper_is_one_per_vault_and_revocation_is_immediate() {
   let bot=Pubkey::new_unique();
