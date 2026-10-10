@@ -129,6 +129,8 @@ jobs:
         run: cargo test -p pactum-vault --lib v2::tests
       - name: Test historical trade-opening share proof
         run: cargo test -p pactum-vault --lib trade_snapshots::tests
+      - name: Test vault-scoped order and fill-refund event identities
+        run: cargo test -p pactum-vault --lib trade_events::tests
       - name: Test profit fees and late-deposit NAV math
         run: cargo test -p pactum-vault --lib accounting::tests
 
