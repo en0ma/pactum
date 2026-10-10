@@ -125,6 +125,8 @@ jobs:
         run: cargo check -p pactum-vault --lib
       - name: Test vault-scoped keeper authorization
         run: cargo test -p pactum-vault --lib vault_keeper_authorization_tests
+      - name: Test independent v2 vault authorization and risk rules
+        run: cargo test -p pactum-vault --lib v2::tests
 
   dflow-sdk-offline:
     if: ${{ github.event_name == 'pull_request' }}
