@@ -1,3 +1,9 @@
+## Atomic DFlow-opening binding (new)
+
+`open_trade_snapshot_v2` now requires the immediately following instruction to be the **final** top-level DFlow PredictionMarkets OpenUserOrder instruction in that same Solana transaction. It checks the vault's sole keeper signer and vault-specific risk limits, the shared market registry, DFlow account layout and PDA fill/refund recipients, the observed order data, and requires `trade_id` to equal the DFlow order-account public key bytes. The trade-open share revision and bot fee rate are captured at the validated opening point.
+
+**Limitations:** no funding is performed; the DFlow order still uses the keeper's source USDC. This is based on a known 12-account OpenUserOrder layout pending authentic unsigned DFlow quotes. It does not establish PnL eligibility for all investors by itself, settle trade outcomes, pay protocol/trader fees, or enable immediate deposits while earlier trades are open. A separate order cannot be submitted as evidence for this snapshot. Never enable mainnet custody movement on this basis alone.
+
 ## Read-only historical participation proof
 
 `verify_trade_participation_v2` verifies an individual depositor's historical active share balance against a specific vault's trade-opening revision. Optional consecutive before/after checkpoints must match their canonical vault-position and mutation-index PDAs. The verifier rejects skipped indices, revision gaps, cross-vault/depositor mismatches, and amounts exceeding the trade's opening share supply. A late entrant with a first checkpoint after opening receives zero historical shares. This verifier is **read-only** and logs eligible shares; it does not create an entitlement, distribute PnL, fund DFlow, or pay fees.
