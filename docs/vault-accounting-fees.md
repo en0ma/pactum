@@ -1,3 +1,9 @@
+## Canonical DFlow terminal account verification
+
+The V1 observed terminal order predicate is system ownership, zero lamports, and empty data. `verify_canonical_dflow_order_closed` now additionally requires the supplied address to equal the registered order's immutable `order_account`, rejecting arbitrary closed accounts, open accounts, wrong owners and accounts with data. Regression tests cover these cases. Future V2 terminal handlers must read the real account's owner/lamports/data length and require this predicate before applying `project_terminal_order`.
+
+A closed account proves the canonical order account is no longer open under this observed lifecycle. It does not by itself prove per-fill/refund amounts or authenticate historical DFlow events; no persistent V2 terminal handler or payout is enabled.
+
 ## Separate terminal closure after fill/refund events
 
 `project_terminal_order` now closes a fully reconciled order **without inventing an extra fill event**. It requires externally proven closure of the matching DFlow order account, all original USDC consumed or refunded, and a minimum total received outcome amount for the actual consumed USDC after applying the registered quote/slippage. A fully refunded order can close with zero outcome atoms. Duplicate terminal transitions fail; tests cover unclosed/partial input, underfill, refunds and duplicate closure.
