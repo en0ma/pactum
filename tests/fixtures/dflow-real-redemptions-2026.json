@@ -1,0 +1,28 @@
+{
+  "source": {
+    "run": 388,
+    "artifact": 11686286269,
+    "rpcCommitment": "finalized",
+    "program": "pReDicTmksnPfkfiz33ndSdbe2dY43KYPg4U2dbvHvb"
+  },
+  "cases": [
+    {
+      "signature": "542GdJZfw4Ju8n5pyG5Gk6EJEGgbQNuWLBPSeTf7p4dXW2KC3bzA7X3X95NS4RjBA9WJWAXV1WQTcfRQGLcc1GjN",
+      "action": 89,
+      "eventSubtype": 3,
+      "marketUsdc": "5aNcsAzb9ZzeyhwTGaxDbi49FbEu7ois38nbxpCg36vn",
+      "recipientUsdc": "BQQsYUjaJMyHyttBUkKLD9g9KyHdo1rUvUSKaLjR8MFR",
+      "debitedUsdcAtoms": "1000000",
+      "creditedUsdcAtoms": "1000000"
+    },
+    {
+      "signature": "4SQTyp8hK3mHmyZJMYycHk95hja7innWnbJrVTZyN5whnTdYbdvBYanZxBzaYvvPKEwCHqZizuZabFuaSmMP32Ke",
+      "action": 89,
+      "eventSubtype": 3,
+      "marketUsdc": "8jfjkBBLFvvANqTNRRVY8W6GUNx7ZS91TVAudT92XpQE",
+      "recipientUsdc": "2sgWhmwFVp1bfexdKD2E15EAtzeyaeiZcmpHzo93ugxn",
+      "debitedUsdcAtoms": "3000000",
+      "creditedUsdcAtoms": "3000000"
+    }
+  ]
+}
