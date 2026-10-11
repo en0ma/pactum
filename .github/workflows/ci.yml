@@ -227,6 +227,7 @@ jobs:
     env:
       MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
       DFLOW_REDEEM_SCAN_LIMIT: "250"
+      DFLOW_REDEEM_SIGNATURES: "542GdJZfw4Ju8n5pyG5Gk6EJEGgbQNuWLBPSeTf7p4dXW2KC3bzA7X3X95NS4RjBA9WJWAXV1WQTcfRQGLcc1GjN,4SQTyp8hK3mHmyZJMYycHk95hja7innWnbJrVTZyN5whnTdYbdvBYanZxBzaYvvPKEwCHqZizuZabFuaSmMP32Ke"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
