@@ -1445,6 +1445,52 @@ pub mod pactum_vault {
         )
         .map_err(Into::into)
     }
+    /// CI-only observed 0x59 redemption route probe on a mainnet fork.
+    /// Uses the real market/custody account ordering but an unfunded PDA-owned
+    /// outcome position, so a successful redemption is NOT expected.
+    #[cfg(feature = "test-hooks")]
+    pub fn probe_dflow_redeem_0x59(ctx: Context<ProbeDflowRedeem059>) -> Result<()> {
+        let keys = dflow::prediction_v1::RedeemKeys {
+            event_authority: ctx.accounts.event_authority.key(),
+            market_ledger: ctx.accounts.market_ledger.key(),
+            settlement_vault: ctx.accounts.settlement_vault.key(),
+            outcome_account: ctx.accounts.outcome_account.key(),
+            settlement_destination: ctx.accounts.recipient_usdc.key(),
+            usdc_mint: ctx.accounts.usdc_mint.key(),
+            outcome_mint: ctx.accounts.outcome_mint.key(),
+            token_authority: ctx.accounts.probe_authority.key(),
+            token_2022_program: ctx.accounts.token_2022_program.key(),
+            token_program: ctx.accounts.token_program.key(),
+        };
+        let accounts = dflow::prediction_v1::observed_redeem_accounts_2026(&keys);
+        let infos = [
+            ctx.accounts.dflow_program.to_account_info(),
+            ctx.accounts.event_authority.to_account_info(),
+            ctx.accounts.market_ledger.to_account_info(),
+            ctx.accounts.settlement_vault.to_account_info(),
+            ctx.accounts.outcome_account.to_account_info(),
+            ctx.accounts.recipient_usdc.to_account_info(),
+            ctx.accounts.usdc_mint.to_account_info(),
+            ctx.accounts.outcome_mint.to_account_info(),
+            ctx.accounts.probe_authority.to_account_info(),
+            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_program.to_account_info(),
+        ];
+        let writable = [false,false,false,true,true,true,false,true,false,false,false];
+        let metas: Vec<AccountMeta> = accounts.iter().enumerate().map(|(i,key)| {
+            if writable[i] { AccountMeta::new(*key, false) }
+            else { AccountMeta::new_readonly(*key, i == 8) }
+        }).collect();
+        let ix = Instruction {
+            program_id: dflow::DFLOW_PREDICTION_MARKETS,
+            accounts: metas,
+            data: dflow::prediction_v1::observed_redeem_market_outcome_data_2026(1_000_000).to_vec(),
+        };
+        let bump = [ctx.bumps.probe_authority];
+        let seeds: &[&[u8]] = &[b"dflow_cpi_probe", &bump];
+        solana_cpi::invoke_signed(&ix, &infos, &[seeds]).map_err(Into::into)
+    }
+
 }
 
 /// Belt-and-suspenders identity check in addition to Anchor's account seeds
@@ -2579,6 +2625,43 @@ pub struct ProbeDflowOpenOrderKeeperFunded<'info> {
     /// CHECK: fixed DFlow prediction-market program.
     #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
     pub dflow_program: UncheckedAccount<'info>,
+}
+
+#[cfg(feature = "test-hooks")]
+#[derive(Accounts)]
+pub struct ProbeDflowRedeem059<'info> {
+    /// CHECK: test-only PDA, cannot authorize any existing historical position.
+    #[account(seeds = [b"dflow_cpi_probe"], bump)]
+    pub probe_authority: UncheckedAccount<'info>,
+    /// CHECK: pinned DFlow program.
+    #[account(address = dflow::DFLOW_PREDICTION_MARKETS)]
+    pub dflow_program: UncheckedAccount<'info>,
+    /// CHECK: pinned DFlow event authority.
+    #[account(address = dflow::prediction_v1::EVENT_AUTHORITY)]
+    pub event_authority: UncheckedAccount<'info>,
+    /// CHECK: historical DFlow ledger, read-only probe.
+    pub market_ledger: UncheckedAccount<'info>,
+    /// CHECK: historical market USDC custody.
+    #[account(mut)]
+    pub settlement_vault: UncheckedAccount<'info>,
+    /// CHECK: historical closed outcome token account, intentionally unredeemable.
+    #[account(mut)]
+    pub outcome_account: UncheckedAccount<'info>,
+    /// CHECK: historical USDC destination.
+    #[account(mut)]
+    pub recipient_usdc: UncheckedAccount<'info>,
+    /// CHECK: canonical USDC.
+    #[account(address = dflow::USDC_MINT)]
+    pub usdc_mint: UncheckedAccount<'info>,
+    /// CHECK: historical outcome mint.
+    #[account(mut)]
+    pub outcome_mint: UncheckedAccount<'info>,
+    /// CHECK: pinned token-2022.
+    #[account(address = dflow::prediction_v1::TOKEN_2022_PROGRAM)]
+    pub token_2022_program: UncheckedAccount<'info>,
+    /// CHECK: pinned SPL token.
+    #[account(address = dflow::prediction_v1::SPL_TOKEN_PROGRAM)]
+    pub token_program: UncheckedAccount<'info>,
 }
 
 #[cfg(feature = "test-hooks")]
