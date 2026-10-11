@@ -732,6 +732,39 @@ async function main() {
   }
 
 
+  // Real 0x59 redemption ABI and account-order probe. The observed historical
+  // outcome account is closed; never expect a payout or modify mainnet funds.
+  const redeemIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: probeAuthority, isSigner: false, isWritable: false },
+      { pubkey: DFLOW_PM, isSigner: false, isWritable: false },
+      { pubkey: DFLOW_EVENT_AUTHORITY, isSigner: false, isWritable: false },
+      { pubkey: new PublicKey("2Mb9VfikR6g9NXcXoEGvcjNMvwcdony8zu359WEC9vbh"), isSigner: false, isWritable: false },
+      { pubkey: new PublicKey("5aNcsAzb9ZzeyhwTGaxDbi49FbEu7ois38nbxpCg36vn"), isSigner: false, isWritable: true },
+      { pubkey: new PublicKey("HEtexPo9ZGdPGEvVAHjDNx1iDHyXDFkkNsEriaFeoWb5"), isSigner: false, isWritable: true },
+      { pubkey: new PublicKey("BQQsYUjaJMyHyttBUkKLD9g9KyHdo1rUvUSKaLjR8MFR"), isSigner: false, isWritable: true },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: new PublicKey("AhydLZPSumu3toZPNGLkeMEtZBkXvNGkbUwu2AaR4VQ9"), isSigner: false, isWritable: true },
+      { pubkey: TOKEN_2022_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SPL_TOKEN_PROGRAM, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("probe_dflow_redeem_0x59"),
+  });
+  const redeemTx = new Transaction({feePayer:payer.publicKey,recentBlockhash:blockhash}).add(
+    ComputeBudgetProgram.setComputeUnitLimit({units:200_000}),redeemIx,
+  );
+  redeemTx.sign(payer);
+  const redeemSim = await connection.simulateTransaction(redeemTx);
+  const redeemLogs = redeemSim.value.logs ?? [];
+  const redeemReachedDflow = redeemLogs.some(line=>line.includes(`Program ${DFLOW_PM.toBase58()} invoke [2]`));
+  const redeemSignerEscalation = redeemLogs.some(line=>line.toLowerCase().includes("signer privilege escalated"));
+  if (!redeemReachedDflow || redeemSignerEscalation || !redeemSim.value.err) {
+    console.error(redeemLogs.join("\\n"));
+    throw new Error("0x59 fork probe failed: expected DFlow entry with accepted PDA signer, then rejection of spent historical outcome position");
+  }
+  const redeemProbeCu = requireRpcMetric(redeemSim.value.unitsConsumed,"dflow_redeem_0x59_probe.unitsConsumed");
+
   const observedOpenAccounts = await jsonRpc(
     MAINNET_RPC_URL,
     "getMultipleAccounts",
@@ -1820,6 +1853,13 @@ async function main() {
       expectedInnerFailure: true,
       computeUnits: pdaProbeCu,
       cuBudget: DFLOW_PDA_PROBE_CU_BUDGET,
+    },
+    dflowRedeem059Probe: {
+      reachedDflow: redeemReachedDflow,
+      signerPrivilegeAccepted: !redeemSignerEscalation,
+      expectedInnerFailure: Boolean(redeemSim.value.err),
+      computeUnits: redeemProbeCu,
+      historicalOutcomeAccountSpent: true,
     },
     dflowRegistry: {
       marketLedger: dflowRegistry.marketLedger.toBase58(),
