@@ -752,7 +752,9 @@ async function main() {
     data: anchorDiscriminator("probe_dflow_redeem_0x59"),
   });
   const redeemTx = new Transaction({feePayer:payer.publicKey,recentBlockhash:blockhash}).add(
-    ComputeBudgetProgram.setComputeUnitLimit({units:200_000}),redeemIx,
+    ComputeBudgetProgram.setComputeUnitLimit({units:200_000}),
+    SystemProgram.transfer({fromPubkey:payer.publicKey,toPubkey:probeAuthority,lamports:1}),
+    redeemIx,
   );
   redeemTx.sign(payer);
   const redeemSim = await connection.simulateTransaction(redeemTx);
