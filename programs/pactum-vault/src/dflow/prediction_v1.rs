@@ -10,6 +10,9 @@ use crate::{error::PactumError, state::ApprovedMarket};
 pub const OPEN_USER_ORDER_ACTION: u64 = 0x40;
 pub const FILL_USER_ORDER_ACTION: u64 = 0x41;
 pub const REDEEM_MARKET_OUTCOME_ACTION: u64 = 0x58;
+/// Observed in finalized October 2026 redemption transactions; this action uses
+/// an 11-account route and MUST NOT be substituted into the V1 0x58 CPI.
+pub const OBSERVED_REDEEM_ACTION_2026: u64 = 0x59;
 
 pub const OPEN_USER_ORDER_DATA_LEN: usize = 80;
 pub const OPEN_USER_ORDER_SIDE_OFFSET: usize = 16;
