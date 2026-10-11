@@ -13,7 +13,16 @@
       "marketUsdc": "5aNcsAzb9ZzeyhwTGaxDbi49FbEu7ois38nbxpCg36vn",
       "recipientUsdc": "BQQsYUjaJMyHyttBUkKLD9g9KyHdo1rUvUSKaLjR8MFR",
       "debitedUsdcAtoms": "1000000",
-      "creditedUsdcAtoms": "1000000"
+      "creditedUsdcAtoms": "1000000",
+      "burnOutcomeAtoms": "1000000",
+      "burnOpcode": 15,
+      "transferCheckedOpcode": 12,
+      "outcomeAccount": "HEtexPo9ZGdPGEvVAHjDNx1iDHyXDFkkNsEriaFeoWb5",
+      "outcomeMint": "AhydLZPSumu3toZPNGLkeMEtZBkXvNGkbUwu2AaR4VQ9",
+      "outcomeAuthority": "5sHxK2t34SqebVpYbLrCoKj6DJ4utV2bnUcm5xsXxA9y",
+      "marketLedger": "2Mb9VfikR6g9NXcXoEGvcjNMvwcdony8zu359WEC9vbh",
+      "accountClosureOpcode": 9,
+      "dflowActionAccounts": 11
     },
     {
       "signature": "4SQTyp8hK3mHmyZJMYycHk95hja7innWnbJrVTZyN5whnTdYbdvBYanZxBzaYvvPKEwCHqZizuZabFuaSmMP32Ke",
@@ -22,7 +31,16 @@
       "marketUsdc": "8jfjkBBLFvvANqTNRRVY8W6GUNx7ZS91TVAudT92XpQE",
       "recipientUsdc": "2sgWhmwFVp1bfexdKD2E15EAtzeyaeiZcmpHzo93ugxn",
       "debitedUsdcAtoms": "3000000",
-      "creditedUsdcAtoms": "3000000"
+      "creditedUsdcAtoms": "3000000",
+      "burnOutcomeAtoms": "3000000",
+      "burnOpcode": 15,
+      "transferCheckedOpcode": 12,
+      "outcomeAccount": "8pPSswBqomVMQxwmFkYwSrYBG5BCxAeejDcgU1dVrHpr",
+      "outcomeMint": "9eGVwSfcYHTPT6LH5mdVuGRZGY55ZTiXS1johpxowpwU",
+      "outcomeAuthority": "45ZXPfD3nBVwELoS6ZgCEK2ebwYsEtRV2yCMzhhix93K",
+      "marketLedger": "Am8J8LnmuNL4nqsfH3AQNDqfuCvYrW7pYQesBdnRFcM8",
+      "accountClosureOpcode": 9,
+      "dflowActionAccounts": 11
     }
   ]
 }
