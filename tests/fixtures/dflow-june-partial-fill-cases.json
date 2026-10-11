@@ -1,0 +1,33 @@
+{
+  "sourceArtifact": 11532353903,
+  "cases": [
+    {
+      "label": "partial-a",
+      "open": 225980475,
+      "fill": 221098384,
+      "outcome": 481000000,
+      "refundDelta": 4882091,
+      "openRefundRecipient": "5htjTcCNaM6juCAJeXsPezyDjZdwQUrgVuFCxaLV9UJm",
+      "actualRefundOwner": "5htjTcCNaM6juCAJeXsPezyDjZdwQUrgVuFCxaLV9UJm",
+      "openSourceUsdc": "H5pNEYYej7UDKYGSrGgUQ9BNEmA1Wr6CsTf6rc8SGqjH",
+      "actualRefundAccount": "H5pNEYYej7UDKYGSrGgUQ9BNEmA1Wr6CsTf6rc8SGqjH",
+      "orderAccount": "9UzowLyvmrUyWqnTZiH8zJonWe67CfYfabAg3FgYX1Mj",
+      "marketLedger": "69xbzeM7ja9CKFSTRrpcEkfHbzB7M4kM5a5hoyezBn7Z",
+      "marketUsdcAccount": "E5kksUWuxJZD1W98q2WCiPXGMaCpETAzwN4FHb5nAX78"
+    },
+    {
+      "label": "partial-b",
+      "open": 9301888,
+      "fill": 9294288,
+      "outcome": 12000000,
+      "refundDelta": 7600,
+      "openRefundRecipient": "3ALQUAWHJJSBFqZGkzncTuFv7TLi2aYhJ84PW3VGDV9G",
+      "actualRefundOwner": "3ALQUAWHJJSBFqZGkzncTuFv7TLi2aYhJ84PW3VGDV9G",
+      "openSourceUsdc": "3ZWDWPsnYHZJQZMGh7Hvr4CTBn3LFH45zMfoL7tJAn9P",
+      "actualRefundAccount": "3ZWDWPsnYHZJQZMGh7Hvr4CTBn3LFH45zMfoL7tJAn9P",
+      "orderAccount": "An6C9tE27PdMbioEfJZ5qXNMhU1iSc4pxzGtnQYD6frg",
+      "marketLedger": "4F7PJWcGYKtnZUgZuCpqQxsxuZVwJm8xZWhJnaNYCAGz",
+      "marketUsdcAccount": "47Xt8dVfj4473cbSjbSCPNKvAqCXCKkejk6t5DteFkNr"
+    }
+  ]
+}

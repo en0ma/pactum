@@ -14,6 +14,8 @@ pub enum PactumError {
     ZeroShares,
     #[msg("Not enough shares")]
     InsufficientShares,
+    #[msg("Insufficient pending deposit amount")]
+    InsufficientPendingDeposit,
     #[msg("Withdrawal would violate the configured liquidity buffer")]
     LiquidityBufferViolation,
     #[msg("The initial vault balance must be zero")]
@@ -22,6 +24,8 @@ pub enum PactumError {
     InvalidRiskLimits,
     #[msg("Unauthorized admin")]
     UnauthorizedAdmin,
+    #[msg("Keeper is not the active bot assigned to this vault")]
+    UnauthorizedKeeper,
     #[msg("Market configuration is disabled")]
     MarketDisabled,
     #[msg("Trade amount exceeds the per-trade risk limit")]
@@ -34,8 +38,22 @@ pub enum PactumError {
     InvalidDflowAccounts,
     #[msg("DFlow did not debit exactly the validated trade amount")]
     InvalidDflowSpend,
+    #[msg("The strategy keeper market data does not match Pactum's market registry")]
+    MarketRegistryMismatch,
+    #[msg("The Pactum market registry is stale or has no active current market")]
+    MarketRegistryStale,
+    #[msg("The Pactum market registry update is invalid")]
+    InvalidMarketRegistry,
+    #[msg("The temporary keeper delegation is not exact or was not revoked")]
+    InvalidDelegateState,
     #[msg("Trade slippage exceeds Pactum's protocol cap")]
     InvalidSlippage,
+    #[msg("The expected DFlow fill is not yet reflected in the PDA-owned outcome ATA")]
+    DflowFillNotObserved,
+    #[msg("The DFlow order account has not reached a verifiable terminal closed state")]
+    DflowOrderNotTerminal,
+    #[msg("The DFlow terminal refund does not match the reserved order cost basis")]
+    InvalidDflowRefund,
     #[msg("Tracked market exposure does not match the redeemable position")]
     InvalidMarketExposure,
     #[msg("DFlow redemption did not burn the complete tracked outcome position")]
