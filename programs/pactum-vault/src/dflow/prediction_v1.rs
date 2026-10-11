@@ -307,6 +307,25 @@ pub fn validate_redeem_keys(
     Ok(())
 }
 
+/// The observed 0x59 top-level instruction carries the DFlow program as
+/// its first account, then the ten CPI account roles. This is an account-map
+/// **fixture helper**, not settlement authorization or an executable CPI.
+pub fn observed_redeem_accounts_2026(keys: &RedeemKeys) -> [Pubkey; 11] {
+    [
+        super::DFLOW_PREDICTION_MARKETS,
+        keys.event_authority,
+        keys.market_ledger,
+        keys.settlement_vault,
+        keys.outcome_account,
+        keys.settlement_destination,
+        keys.usdc_mint,
+        keys.outcome_mint,
+        keys.token_authority,
+        keys.token_2022_program,
+        keys.token_program,
+    ]
+}
+
 /// Encode the 0x59 redemption observed in finalized mainnet transactions.
 /// The observed instruction has the DFlow program address as account[0] in
 /// its top-level compiled instruction, followed by the same ten account roles
@@ -375,6 +394,36 @@ mod tests {
         assert_eq!(decoded.side, OutcomeSide::Yes);
         assert_eq!(decoded.input_amount, 948_096);
         assert_eq!(decoded.quoted_output_amount, 11_000_000);
+    }
+
+    #[test]
+    fn confirmed_0x59_redemption_matches_all_observed_account_positions() {
+        // Finalized transaction 542GdJZfw4Ju8n5pyG5Gk6EJEGgbQNuWLBPSeTf7p4dXW2KC3bzA7X3X95NS4RjBA9WJWAXV1WQTcfRQGLcc1GjN.
+        let keys=RedeemKeys {
+            event_authority: EVENT_AUTHORITY,
+            market_ledger: pubkey!("2Mb9VfikR6g9NXcXoEGvcjNMvwcdony8zu359WEC9vbh"),
+            settlement_vault: pubkey!("5aNcsAzb9ZzeyhwTGaxDbi49FbEu7ois38nbxpCg36vn"),
+            outcome_account: pubkey!("HEtexPo9ZGdPGEvVAHjDNx1iDHyXDFkkNsEriaFeoWb5"),
+            settlement_destination: pubkey!("BQQsYUjaJMyHyttBUkKLD9g9KyHdo1rUvUSKaLjR8MFR"),
+            usdc_mint: super::super::USDC_MINT,
+            outcome_mint: pubkey!("AhydLZPSumu3toZPNGLkeMEtZBkXvNGkbUwu2AaR4VQ9"),
+            token_authority: pubkey!("5sHxK2t34SqebVpYbLrCoKj6DJ4utV2bnUcm5xsXxA9y"),
+            token_2022_program: TOKEN_2022_PROGRAM,
+            token_program: SPL_TOKEN_PROGRAM,
+        };
+        let actual=observed_redeem_accounts_2026(&keys);
+        assert_eq!(actual.len(),11);
+        assert_eq!(actual[0],super::super::DFLOW_PREDICTION_MARKETS);
+        assert_eq!(actual[1],EVENT_AUTHORITY);
+        assert_eq!(actual[2],keys.market_ledger);
+        assert_eq!(actual[3],keys.settlement_vault);
+        assert_eq!(actual[4],keys.outcome_account);
+        assert_eq!(actual[5],keys.settlement_destination);
+        assert_eq!(actual[6],super::super::USDC_MINT);
+        assert_eq!(actual[7],keys.outcome_mint);
+        assert_eq!(actual[8],keys.token_authority);
+        assert_eq!(actual[9],TOKEN_2022_PROGRAM);
+        assert_eq!(actual[10],SPL_TOKEN_PROGRAM);
     }
 
     #[test]
