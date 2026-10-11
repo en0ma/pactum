@@ -447,7 +447,7 @@ mod tests {
     fn observed_0x59_requires_full_recorded_custody_and_correct_quantity() {
         assert_eq!(
             checked_observed_redeem_data_2026(1_000_000, 1_000_000).unwrap(),
-            [0x59, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x42, 0x0f, 0, 0, 0, 0]
+            [0x59, 0, 0, 0, 0, 0, 0, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0]
         );
         assert_eq!(
             checked_observed_redeem_data_2026(3_000_000, 3_000_000).unwrap(),
