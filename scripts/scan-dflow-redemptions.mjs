@@ -20,6 +20,26 @@ export function redeemInstructions(tx,signature){
  }
  return output;
 }
+export function redemptionTransactionDetails(tx,signature){
+ const keys=keyList(tx), all=[];
+ for(const [outerIndex,ix] of (tx.transaction.message.compiledInstructions??[]).entries())
+  all.push({outerIndex,innerIndex:null,ix});
+ for(const group of tx.meta?.innerInstructions??[])
+  for(const [innerIndex,ix] of group.instructions.entries())all.push({outerIndex:group.index,innerIndex,ix});
+ const dflowActions=all.filter(x=>keys[x.ix.programIdIndex]===PROGRAM).map(x=>{
+  const data=ixData(x.ix);return {outerIndex:x.outerIndex,innerIndex:x.innerIndex,
+    actionU64:data?.length>=8?data.readBigUInt64LE(0).toString():null,
+    dataHex:data?.toString("hex")??null,
+    accounts:[...(x.ix.accountKeyIndexes??x.ix.accounts??[])].map(i=>keys[i])};
+ });
+ const balances=(tx.meta?.postTokenBalances??[]).flatMap(post=>{
+  const pre=(tx.meta?.preTokenBalances??[]).find(p=>p.accountIndex===post.accountIndex&&p.mint===post.mint);
+  const delta=BigInt(post.uiTokenAmount.amount)-BigInt(pre?.uiTokenAmount?.amount??"0");
+  return delta===0n?[]:[{address:keys[post.accountIndex],mint:post.mint,
+     owner:post.owner??pre?.owner??null,deltaAtoms:delta.toString()}];
+ });
+ return {signature,slot:tx.slot,dflowActions,tokenBalanceDeltas:balances};
+}
 export async function scan(connection,{limit=300,page=100,maxMatches=8}={}){
  const matches=[],seen=new Set();let before,scanned=0,failed=0;
  while(scanned<limit&&matches.length<maxMatches){
@@ -38,7 +58,23 @@ export async function scan(connection,{limit=300,page=100,maxMatches=8}={}){
 }
 if(process.argv[1]?.endsWith("scan-dflow-redemptions.mjs")){
  const rpc=process.env.MAINNET_RPC_URL;if(!rpc)throw Error("MAINNET_RPC_URL required");
- const result=await scan(new Connection(rpc,"finalized"),{limit:Number(process.env.DFLOW_REDEEM_SCAN_LIMIT??300)});
+ const conn=new Connection(rpc,"finalized");
+ const signatures=(process.env.DFLOW_REDEEM_SIGNATURES??"").split(",").map(s=>s.trim()).filter(Boolean);
+ const result=signatures.length?{program:PROGRAM,commitment:"finalized",mode:"specified-signatures",matches:[],transactionDetails:[]}
+  :await scan(conn,{limit:Number(process.env.DFLOW_REDEEM_SCAN_LIMIT??300)});
+ for(const signature of signatures){
+  const tx=await conn.getTransaction(signature,{commitment:"finalized",maxSupportedTransactionVersion:0});
+  if(!tx||tx.meta?.err)throw Error("Missing or failed redemption transaction");
+  result.matches.push(...redeemInstructions(tx,signature));
+  result.transactionDetails.push(redemptionTransactionDetails(tx,signature));
+ }
+ if(!signatures.length){
+  result.transactionDetails=[];
+  for(const signature of [...new Set(result.matches.map(x=>x.signature))].slice(0,3)){
+   const tx=await conn.getTransaction(signature,{commitment:"finalized",maxSupportedTransactionVersion:0});
+   if(tx)result.transactionDetails.push(redemptionTransactionDetails(tx,signature));
+  }
+ }
  mkdirSync("artifacts",{recursive:true});writeFileSync("artifacts/dflow-redemption-transactions.json",JSON.stringify(result,null,2)+"\n");
  console.log(JSON.stringify({scanned:result.scanned,failed:result.failed,matches:result.matches.map(x=>({signature:x.signature,kind:x.kind,slot:x.slot}))}));
 }
