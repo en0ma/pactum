@@ -326,13 +326,16 @@ pub fn observed_redeem_accounts_2026(keys: &RedeemKeys) -> [Pubkey; 11] {
     ]
 }
 
-/// Encode the 0x59 redemption observed in finalized mainnet transactions.
+/// Encode the observed sixteen-byte 0x59 redemption action and exact burn amount.
 /// The observed instruction has the DFlow program address as account[0] in
 /// its top-level compiled instruction, followed by the same ten account roles
 /// currently validated by RedeemKeys. Do not switch the production CPI before
 /// successfully simulating this variant with Pactum vault PDA authority.
-pub fn observed_redeem_market_outcome_data_2026() -> [u8; REDEEM_MARKET_OUTCOME_DATA_LEN] {
-    OBSERVED_REDEEM_ACTION_2026.to_le_bytes()
+pub fn observed_redeem_market_outcome_data_2026(outcome_atoms: u64) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&OBSERVED_REDEEM_ACTION_2026.to_le_bytes());
+    bytes[8..].copy_from_slice(&outcome_atoms.to_le_bytes());
+    bytes
 }
 
 pub fn redeem_market_outcome_data() -> [u8; REDEEM_MARKET_OUTCOME_DATA_LEN] {
@@ -428,9 +431,12 @@ mod tests {
 
     #[test]
     fn observed_0x59_redeem_is_distinct_from_existing_0x58_cpi() {
-        let observed=observed_redeem_market_outcome_data_2026();
-        assert_eq!(observed, 89u64.to_le_bytes());
-        assert_ne!(observed, redeem_market_outcome_data());
+        let observed=observed_redeem_market_outcome_data_2026(1_000_000);
+        assert_eq!(&observed[..8], &89u64.to_le_bytes());
+        assert_eq!(&observed[8..], &1_000_000u64.to_le_bytes());
+        assert_eq!(observed.len(), 16);
+        assert_eq!(observed, [0x59, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0]);
+        assert_ne!(&observed[..8], &redeem_market_outcome_data());
         // Existing production CPI stays explicit 0x58 until a real fork probe.
         assert!(validate_redeem_data(&observed).is_err());
         assert!(validate_redeem_data(&redeem_market_outcome_data()).is_ok());
