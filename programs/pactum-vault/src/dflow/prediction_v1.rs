@@ -331,6 +331,20 @@ pub fn observed_redeem_accounts_2026(keys: &RedeemKeys) -> [Pubkey; 11] {
 /// its top-level compiled instruction, followed by the same ten account roles
 /// currently validated by RedeemKeys. Do not switch the production CPI before
 /// successfully simulating this variant with Pactum vault PDA authority.
+/// Prepare the witnessed 0x59 quantity only when it fully redeems the
+/// already-accounted position. Merely producing these bytes cannot authorize
+/// a transfer or replace the production 0x58 CPI.
+pub fn checked_observed_redeem_data_2026(
+    recorded_outcome_atoms: u64,
+    custodied_outcome_atoms: u64,
+) -> Result<[u8; 16]> {
+    require!(
+        recorded_outcome_atoms > 0 && recorded_outcome_atoms == custodied_outcome_atoms,
+        PactumError::InvalidMarketExposure
+    );
+    Ok(observed_redeem_market_outcome_data_2026(recorded_outcome_atoms))
+}
+
 pub fn observed_redeem_market_outcome_data_2026(outcome_atoms: u64) -> [u8; 16] {
     let mut bytes = [0u8; 16];
     bytes[..8].copy_from_slice(&OBSERVED_REDEEM_ACTION_2026.to_le_bytes());
@@ -427,6 +441,21 @@ mod tests {
         assert_eq!(actual[8],keys.token_authority);
         assert_eq!(actual[9],TOKEN_2022_PROGRAM);
         assert_eq!(actual[10],SPL_TOKEN_PROGRAM);
+    }
+
+    #[test]
+    fn observed_0x59_requires_full_recorded_custody_and_correct_quantity() {
+        assert_eq!(
+            checked_observed_redeem_data_2026(1_000_000, 1_000_000).unwrap(),
+            [0x59, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x42, 0x0f, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            checked_observed_redeem_data_2026(3_000_000, 3_000_000).unwrap(),
+            [0x59, 0, 0, 0, 0, 0, 0, 0xc0, 0xc6, 0x2d, 0, 0, 0, 0, 0]
+        );
+        for (recorded, custodied) in [(0, 0), (1, 0), (1, 2), (2, 1)] {
+            assert!(checked_observed_redeem_data_2026(recorded, custodied).is_err());
+        }
     }
 
     #[test]
