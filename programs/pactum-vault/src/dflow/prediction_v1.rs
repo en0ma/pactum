@@ -445,14 +445,12 @@ mod tests {
 
     #[test]
     fn observed_0x59_requires_full_recorded_custody_and_correct_quantity() {
-        assert_eq!(
-            checked_observed_redeem_data_2026(1_000_000, 1_000_000).unwrap(),
-            [0x59, 0, 0, 0, 0, 0, 0, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0]
-        );
-        assert_eq!(
-            checked_observed_redeem_data_2026(3_000_000, 3_000_000).unwrap(),
-            [0x59, 0, 0, 0, 0, 0, 0, 0xc0, 0xc6, 0x2d, 0, 0, 0, 0, 0]
-        );
+        for atoms in [1_000_000u64, 3_000_000u64] {
+            let encoded = checked_observed_redeem_data_2026(atoms, atoms).unwrap();
+            assert_eq!(encoded.len(), 16);
+            assert_eq!(&encoded[..8], &89u64.to_le_bytes());
+            assert_eq!(&encoded[8..], &atoms.to_le_bytes());
+        }
         for (recorded, custodied) in [(0, 0), (1, 0), (1, 2), (2, 1)] {
             assert!(checked_observed_redeem_data_2026(recorded, custodied).is_err());
         }
