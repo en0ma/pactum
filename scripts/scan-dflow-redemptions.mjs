@@ -11,7 +11,7 @@ export function redeemInstructions(tx,signature){
   if(keys[ix.programIdIndex]!==PROGRAM)continue;
   const data=ixData(ix);if(!data)continue;
   const action=data.length>=8?data.readBigUInt64LE(0):null;
-  const isRedeem=action===88n&&data.length===8;
+  const isRedeem=(action===88n||action===89n)&&data.length===8;
   const isRedeemEvent=data.length>=9&&data[0]===240&&data.subarray(1,8).every(b=>b===0)&&data[8]===3;
   if(!isRedeem&&!isRedeemEvent)continue;
   output.push({signature,slot:tx.slot,blockTime:tx.blockTime,outerIndex,innerIndex,
@@ -38,7 +38,14 @@ export function redemptionTransactionDetails(tx,signature){
   return delta===0n?[]:[{address:keys[post.accountIndex],mint:post.mint,
      owner:post.owner??pre?.owner??null,deltaAtoms:delta.toString()}];
  });
- return {signature,slot:tx.slot,dflowActions,tokenBalanceDeltas:balances};
+ const splActions=all.filter(x=>[ "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"].includes(keys[x.ix.programIdIndex])).map(x=>{
+   const data=ixData(x.ix);
+   const opcode=data?.[0]??null;
+   return {outerIndex:x.outerIndex,innerIndex:x.innerIndex,program:keys[x.ix.programIdIndex],
+     opcode,amountAtoms:data&&data.length>=9&&[3,8,12,13,14,15].includes(opcode)?data.readBigUInt64LE(1).toString():null,
+     accounts:[...(x.ix.accountKeyIndexes??x.ix.accounts??[])].map(i=>keys[i])};
+ });
+ return {signature,slot:tx.slot,dflowActions,tokenInstructions:splActions,tokenBalanceDeltas:balances};
 }
 export async function scan(connection,{limit=300,page=100,maxMatches=8}={}){
  const matches=[],seen=new Set();let before,scanned=0,failed=0;
