@@ -219,6 +219,36 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  dflow-redemption-evidence:
+    if: ${{ github.event_name == 'pull_request' }}
+    name: DFlow redemption transactions (finalized RPC)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+      DFLOW_REDEEM_SCAN_LIMIT: "250"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: Locate authentic DFlow 0x58 redemptions
+        run: |
+          mkdir -p artifacts
+          if [ -z "$MAINNET_RPC_URL" ]; then
+            echo '{"status":"not_run","reason":"MAINNET_RPC_URL absent"}' > artifacts/dflow-redemption-transactions.json
+          else
+            node scripts/scan-dflow-redemptions.mjs
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dflow-redemption-transactions
+          path: artifacts/dflow-redemption-transactions.json
+          retention-days: 14
+          if-no-files-found: warn
+
   dflow-connectivity:
     if: ${{ github.event_name == 'pull_request' }}
     name: DFlow public API connectivity (read-only)
