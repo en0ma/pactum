@@ -123,6 +123,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check vault program
         run: cargo check -p pactum-vault --lib
+      - name: Check test-only DFlow fork probe compilation
+        run: cargo check -p pactum-vault --lib --features test-hooks
       - name: Test verified DFlow 0x59 redemption account layout and legacy 0x58 isolation
         run: cargo test -p pactum-vault --lib dflow::prediction_v1::tests
       - name: Test vault-scoped keeper authorization
