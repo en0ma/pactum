@@ -10,7 +10,7 @@ const token2022="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 export function verifyRedemption(tx,expected){
  assert.equal(tx.meta?.err,null,"finalized transaction must succeed");
  const details=redemptionTransactionDetails(tx,expected.signature);
- const actions=details.dflowActions.filter(a=>a.actionU64==="89"&&a.dataHex==="5900000000000000");
+ const actions=details.dflowActions.filter(a=>a.actionU64==="89"&&a.dataHex===("5900000000000000"+Buffer.from(Uint8Array.from({length:8},(_,i)=>Number((BigInt(expected.burnOutcomeAtoms)>>BigInt(8*i))&255n))).toString("hex")));
  assert.equal(actions.length,1,"exactly one DFlow 0x59 route");
  assert.deepEqual(actions[0].accounts,[dflow,eventAuthority,expected.marketLedger,expected.marketUsdc,expected.outcomeAccount,expected.recipientUsdc,mint,expected.outcomeMint,expected.outcomeAuthority,token2022,spl],"exact 0x59 program and custody account roles");
  const events=redeemInstructions(tx,expected.signature).filter(e=>e.kind==="redeem-event");
