@@ -388,7 +388,7 @@ jobs:
           retention-days: 14
 
   dflow-cpi-evidence:
-    if: ${{ (github.event_name == 'pull_request' && github.head_ref == 'feat/dflow-fill-reconciliation') || (github.event_name == 'workflow_dispatch' && (inputs.scope == 'architecture' || inputs.scope == 'full')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.scope == 'architecture' || inputs.scope == 'full')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     name: DFlow CPI architecture evidence
     runs-on: ubuntu-24.04
     timeout-minutes: 35
